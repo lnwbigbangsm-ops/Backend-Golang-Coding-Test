@@ -1,5 +1,10 @@
 # Backend Golang Coding Test
 
+| Part | Deliverable |
+| --- | --- |
+| 1. User Management API | Code in this repository; documented below |
+| 2. Lottery Search System | Design proposal: [docs/lottery-search-design.md](docs/lottery-search-design.md) |
+
 ## Part 1: User Management API
 
 A RESTful (and gRPC) user management service in Go, backed by MongoDB, with JWT (HS256) authentication. It uses a hexagonal (ports and adapters) structure.
