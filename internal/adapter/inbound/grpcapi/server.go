@@ -73,6 +73,8 @@ func (s *Server) toStatus(ctx context.Context, err error) error {
 		return status.Error(codes.NotFound, "user not found")
 	case errors.Is(err, domain.ErrEmailAlreadyExists):
 		return status.Error(codes.AlreadyExists, "email already exists")
+	case errors.Is(err, domain.ErrForbidden):
+		return status.Error(codes.PermissionDenied, "permission denied")
 	default:
 		s.logger.ErrorContext(ctx, "grpc call failed", "error", err)
 		return status.Error(codes.Internal, "internal error")

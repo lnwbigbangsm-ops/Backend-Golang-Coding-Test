@@ -109,12 +109,61 @@ func TestUserService_Get(t *testing.T) {
 }
 
 func TestUserService_List(t *testing.T) {
-	repo := &mocks.UserRepository{ListFn: func(context.Context) ([]*domain.User, error) {
-		return []*domain.User{{ID: "1"}, {ID: "2"}}, nil
-	}}
-	users, err := newTestUserService(repo, &mocks.PasswordHasher{}).List(context.Background())
-	if err != nil || len(users) != 2 {
-		t.Errorf("List = %v, %v", users, err)
+	var gotOffset, gotLimit int
+	repo := &mocks.UserRepository{
+		ListFn: func(_ context.Context, offset, limit int) ([]*domain.User, error) {
+			gotOffset, gotLimit = offset, limit
+			return []*domain.User{{ID: "21"}, {ID: "22"}}, nil
+		},
+		CountFn: func(context.Context) (int64, error) { return 22, nil },
+	}
+	page := domain.Page{Number: 2, Size: 20}
+	res, err := newTestUserService(repo, &mocks.PasswordHasher{}).List(context.Background(), page)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if gotOffset != 20 || gotLimit != 20 {
+		t.Errorf("repo called with offset=%d limit=%d, want 20, 20", gotOffset, gotLimit)
+	}
+	if len(res.Users) != 2 || res.TotalItems != 22 || res.Page != page || page.TotalPages(res.TotalItems) != 2 {
+		t.Errorf("List = %+v", res)
+	}
+}
+
+func TestUserService_List_InvalidPage(t *testing.T) {
+	s := newTestUserService(&mocks.UserRepository{}, &mocks.PasswordHasher{}) // repo must not be called
+	tests := []struct {
+		page  domain.Page
+		field string
+	}{
+		{domain.Page{Number: 0, Size: 20}, "page"},
+		{domain.Page{Number: 1, Size: 0}, "page_size"},
+		{domain.Page{Number: 1, Size: domain.MaxPageSize + 1}, "page_size"},
+	}
+	for _, tt := range tests {
+		_, err := s.List(context.Background(), tt.page)
+		var verr *domain.ValidationError
+		if !errors.As(err, &verr) || verr.Fields[tt.field] == "" {
+			t.Errorf("List(%+v) err = %v, want validation error on %q", tt.page, err, tt.field)
+		}
+	}
+}
+
+func TestUserService_OnlyOwnerCanModify(t *testing.T) {
+	s := newTestUserService(&mocks.UserRepository{}, &mocks.PasswordHasher{}) // repo must not be called
+	name := "Mallory"
+	for _, actor := range []string{"someone-else", ""} {
+		if _, err := s.Update(context.Background(), actor, "id-1", domain.UserUpdate{Name: &name}); !errors.Is(err, domain.ErrForbidden) {
+			t.Errorf("Update by %q err = %v, want ErrForbidden", actor, err)
+		}
+		if err := s.Delete(context.Background(), actor, "id-1"); !errors.Is(err, domain.ErrForbidden) {
+			t.Errorf("Delete by %q err = %v, want ErrForbidden", actor, err)
+		}
+	}
+	// Authorization is checked before validation, so invalid input from a
+	// non-owner still yields 403 and reveals nothing.
+	if _, err := s.Update(context.Background(), "someone-else", "id-1", domain.UserUpdate{}); !errors.Is(err, domain.ErrForbidden) {
+		t.Errorf("empty update by non-owner err = %v, want ErrForbidden", err)
 	}
 }
 
@@ -126,7 +175,7 @@ func TestUserService_Update(t *testing.T) {
 	}}
 	s := newTestUserService(repo, &mocks.PasswordHasher{})
 
-	user, err := s.Update(context.Background(), "id-1", domain.UserUpdate{Name: ptr(" Bob "), Email: ptr(" BOB@Example.com")})
+	user, err := s.Update(context.Background(), "id-1", "id-1", domain.UserUpdate{Name: ptr(" Bob "), Email: ptr(" BOB@Example.com")})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -151,7 +200,7 @@ func TestUserService_Update_Validation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := s.Update(context.Background(), "id-1", tt.update)
+			_, err := s.Update(context.Background(), "id-1", "id-1", tt.update)
 			var verr *domain.ValidationError
 			if !errors.As(err, &verr) || verr.Fields[tt.field] == "" {
 				t.Errorf("err = %v, want validation error on %q", err, tt.field)
@@ -168,11 +217,8 @@ func TestUserService_DeleteAndCount(t *testing.T) {
 	}
 	s := newTestUserService(repo, &mocks.PasswordHasher{})
 
-	if err := s.Delete(context.Background(), "id-1"); err != nil || deleted != "id-1" {
+	if err := s.Delete(context.Background(), "id-1", "id-1"); err != nil || deleted != "id-1" {
 		t.Errorf("Delete: err=%v deleted=%q", err, deleted)
-	}
-	if err := s.Delete(context.Background(), ""); !errors.Is(err, domain.ErrUserNotFound) {
-		t.Errorf("Delete(\"\") err = %v", err)
 	}
 	if n, err := s.Count(context.Background()); err != nil || n != 42 {
 		t.Errorf("Count = %d, %v", n, err)

@@ -1,0 +1,308 @@
+openapi: 3.1.0
+info:
+  title: User Management API
+  version: 1.0.0
+  description: |
+    REST API for managing users, authenticated with HS256 JWTs.
+
+    Conventions:
+    - JSON field names and query parameters are snake_case (matching OAuth 2.0's
+      `access_token` / `token_type`).
+    - IDs are opaque strings. Clients must not parse them or rely on their format.
+    - Every error uses the `Error` schema, including unknown routes (404) and
+      wrong methods (405).
+servers:
+  - url: http://localhost:8080
+security:
+  - bearerAuth: []
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness check
+      security: []
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, const: ok }
+
+  /api/v1/auth/register:
+    post:
+      summary: Register a new user (public)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUserRequest" }
+      responses:
+        "201": { $ref: "#/components/responses/UserCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/v1/auth/login:
+    post:
+      summary: Exchange email and password for an access token
+      description: Safe to retry; each call issues a new token.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authenticated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/v1/users:
+    post:
+      summary: Create a user (authenticated)
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUserRequest" }
+      responses:
+        "201": { $ref: "#/components/responses/UserCreated" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    get:
+      summary: List users, oldest first
+      description: Ordered by `created_at` ascending, ties broken by ID, so pages are stable.
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: One page of users
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
+  /api/v1/users/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: Get a user by ID
+      responses:
+        "200":
+          description: The user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      summary: Update your own name and/or email
+      description: |
+        Only fields present in the body change. Callers may only update their
+        own account (`id` must equal the token's `sub`); otherwise 403 is
+        returned whether or not `id` exists. Idempotent: safe to retry.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                email: { type: string, format: email }
+      responses:
+        "200":
+          description: The updated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+    delete:
+      summary: Delete your own account
+      description: |
+        Callers may only delete their own account. Deleting revokes the
+        caller's tokens immediately, so a retry after a lost response returns
+        401; treat 401 on a retried DELETE as "already deleted".
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Optional client-generated key (for example a UUID created once per
+        intent and reused on every retry), at most 255 characters. Keys are
+        scoped to the method, path and caller and kept for 24 hours.
+        - Same key and body: the original response is replayed with
+          `Idempotent-Replayed: true`.
+        - Same key, different body: 422 `idempotency_key_reused`.
+        - Same key while the first request is still running: 409 `request_in_progress`.
+        - 5xx responses are not stored, so the request can be retried.
+      schema: { type: string, maxLength: 255 }
+
+  schemas:
+    CreateUserRequest:
+      type: object
+      additionalProperties: false
+      required: [name, email, password]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100, description: Trimmed before storing }
+        email: { type: string, format: email, description: Trimmed and lower-cased; unique }
+        password: { type: string, minLength: 8, description: "8 characters to 72 bytes (bcrypt limit)" }
+
+    User:
+      type: object
+      required: [id, name, email, created_at]
+      properties:
+        id: { type: string, description: Opaque identifier }
+        name: { type: string }
+        email: { type: string, format: email }
+        created_at: { type: string, format: date-time, description: UTC, millisecond precision }
+
+    UserList:
+      type: object
+      required: [data, pagination]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+        pagination:
+          type: object
+          required: [page, page_size, total_items, total_pages]
+          properties:
+            page: { type: integer }
+            page_size: { type: integer }
+            total_items: { type: integer }
+            total_pages: { type: integer }
+
+    LoginResponse:
+      type: object
+      required: [access_token, token_type, expires_at, user]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: Bearer }
+        expires_at: { type: string, format: date-time, description: UTC }
+        user: { $ref: "#/components/schemas/User" }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Machine-readable; stable across releases. Branch on this, not on `message`.
+              enum:
+                - bad_request
+                - validation_error
+                - unauthorized
+                - invalid_credentials
+                - forbidden
+                - not_found
+                - method_not_allowed
+                - email_exists
+                - idempotency_key_reused
+                - request_in_progress
+                - internal_error
+            message: { type: string, description: Human-readable; may change }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+              description: Per-field problems, keyed by field name
+
+  responses:
+    UserCreated:
+      description: Created
+      headers:
+        Location:
+          schema: { type: string }
+          description: URL of the new user
+        Idempotent-Replayed:
+          schema: { type: string, const: "true" }
+          description: Present when the response is a replay of an earlier request with the same Idempotency-Key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/User" }
+    BadRequest:
+      description: Malformed body (not JSON, wrong type, unknown field, too large) or bad Idempotency-Key
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unprocessable:
+      description: Well-formed request whose values failed validation, or an Idempotency-Key reused with a different body
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing, invalid or expired token, or wrong credentials
+      headers:
+        WWW-Authenticate:
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Authenticated, but the target is another user's account
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: User not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Email already in use, or a request with the same Idempotency-Key is in progress
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

@@ -63,8 +63,14 @@ func TestUserRepository_Integration(t *testing.T) {
 	if err := repo.Create(ctx, bob); err != nil {
 		t.Fatal(err)
 	}
-	if users, err := repo.List(ctx); err != nil || len(users) != 2 || users[0].ID != alice.ID {
+	if users, err := repo.List(ctx, 0, 10); err != nil || len(users) != 2 || users[0].ID != alice.ID {
 		t.Errorf("List = %v, %v", users, err)
+	}
+	if users, err := repo.List(ctx, 1, 10); err != nil || len(users) != 1 || users[0].ID != bob.ID {
+		t.Errorf("List(offset 1) = %v, %v", users, err)
+	}
+	if users, err := repo.List(ctx, 0, 1); err != nil || len(users) != 1 || users[0].ID != alice.ID {
+		t.Errorf("List(limit 1) = %v, %v", users, err)
 	}
 
 	newName := "Robert"

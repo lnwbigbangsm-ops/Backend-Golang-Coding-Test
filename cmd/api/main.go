@@ -55,8 +55,13 @@ func run(logger *slog.Logger) error {
 		}
 	}()
 
-	repo := mongodb.NewUserRepository(client.Database(cfg.MongoDatabase))
+	db := client.Database(cfg.MongoDatabase)
+	repo := mongodb.NewUserRepository(db)
 	if err := repo.EnsureIndexes(ctx); err != nil {
+		return err
+	}
+	idem := mongodb.NewIdempotencyStore(db)
+	if err := idem.EnsureIndexes(ctx, cfg.IdempotencyRetention); err != nil {
 		return err
 	}
 	tokens, err := security.NewJWTService(cfg.JWTSecret, cfg.JWTIssuer, cfg.JWTTTL)
@@ -75,7 +80,7 @@ func run(logger *slog.Logger) error {
 	// ---- Inbound adapters ----
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httpapi.NewRouter(users, auth, logger),
+		Handler:           httpapi.NewRouter(users, auth, idem, logger),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,

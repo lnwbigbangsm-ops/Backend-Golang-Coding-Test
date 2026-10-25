@@ -11,6 +11,9 @@ var (
 	ErrEmailAlreadyExists = errors.New("email already exists")
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrInvalidToken       = errors.New("invalid or expired token")
+	// ErrForbidden means the caller is authenticated but may not act on the
+	// target resource (for example, modifying another user's account).
+	ErrForbidden = errors.New("forbidden")
 )
 
 // ValidationError collects per-field validation messages.

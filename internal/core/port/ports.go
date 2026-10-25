@@ -19,10 +19,39 @@ type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByID(ctx context.Context, id string) (*domain.User, error)
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
-	List(ctx context.Context) ([]*domain.User, error)
+	// List returns up to limit users ordered by creation time (oldest first),
+	// skipping the first offset.
+	List(ctx context.Context, offset, limit int) ([]*domain.User, error)
 	Update(ctx context.Context, id string, update domain.UserUpdate) (*domain.User, error)
 	Delete(ctx context.Context, id string) error
 	Count(ctx context.Context) (int64, error)
+}
+
+// IdempotencyRecord is a stored attempt for one (scope, key) pair.
+type IdempotencyRecord struct {
+	Scope       string
+	Key         string
+	RequestHash string
+	ClaimedAt   time.Time
+	Completed   bool
+	StatusCode  int
+	Location    string
+	Body        []byte
+}
+
+// IdempotencyStore records Idempotency-Key usage. Claim must be atomic: of
+// any number of concurrent claims for the same scope and key, exactly one
+// returns claimed=true.
+type IdempotencyStore interface {
+	// Claim inserts rec as in progress. If a record already exists it is
+	// returned with claimed=false, unless it is an in-progress record with the
+	// same request hash claimed before staleBefore, in which case it is taken
+	// over and claimed=true.
+	Claim(ctx context.Context, rec IdempotencyRecord, staleBefore time.Time) (existing *IdempotencyRecord, claimed bool, err error)
+	// Complete stores the response of a claimed request.
+	Complete(ctx context.Context, scope, key string, status int, location string, body []byte) error
+	// Release deletes a claim so the request can be retried.
+	Release(ctx context.Context, scope, key string) error
 }
 
 // PasswordHasher hashes and verifies passwords.
@@ -61,13 +90,21 @@ type LoginResult struct {
 	User        *domain.User
 }
 
-// UserService is the use-case API for managing users.
+// UserPage is one page of users plus the total across all pages.
+type UserPage struct {
+	Users      []*domain.User
+	Page       domain.Page
+	TotalItems int64
+}
+
+// UserService is the use-case API for managing users. actorID is the
+// authenticated caller; users may only modify their own account.
 type UserService interface {
 	Create(ctx context.Context, in CreateUserInput) (*domain.User, error)
 	Get(ctx context.Context, id string) (*domain.User, error)
-	List(ctx context.Context) ([]*domain.User, error)
-	Update(ctx context.Context, id string, update domain.UserUpdate) (*domain.User, error)
-	Delete(ctx context.Context, id string) error
+	List(ctx context.Context, page domain.Page) (*UserPage, error)
+	Update(ctx context.Context, actorID, id string, update domain.UserUpdate) (*domain.User, error)
+	Delete(ctx context.Context, actorID, id string) error
 	Count(ctx context.Context) (int64, error)
 }
 

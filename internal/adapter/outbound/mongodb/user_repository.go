@@ -51,14 +51,15 @@ func NewUserRepository(db *mongo.Database) *UserRepository {
 	return &UserRepository{coll: db.Collection(CollectionName)}
 }
 
-// EnsureIndexes creates the unique email index. It is idempotent.
+// EnsureIndexes creates the unique email index and the index that backs the
+// list order. It is idempotent.
 func (r *UserRepository) EnsureIndexes(ctx context.Context) error {
-	_, err := r.coll.Indexes().CreateOne(ctx, mongo.IndexModel{
-		Keys:    bson.D{{Key: "email", Value: 1}},
-		Options: options.Index().SetUnique(true).SetName("uniq_email"),
+	_, err := r.coll.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "email", Value: 1}}, Options: options.Index().SetUnique(true).SetName("uniq_email")},
+		{Keys: bson.D{{Key: "created_at", Value: 1}, {Key: "_id", Value: 1}}, Options: options.Index().SetName("created_at_id")},
 	})
 	if err != nil {
-		return fmt.Errorf("create email index: %w", err)
+		return fmt.Errorf("create user indexes: %w", err)
 	}
 	return nil
 }
@@ -104,8 +105,13 @@ func (r *UserRepository) findOne(ctx context.Context, filter bson.D) (*domain.Us
 	return doc.toDomain(), nil
 }
 
-func (r *UserRepository) List(ctx context.Context) ([]*domain.User, error) {
-	opts := options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}, {Key: "_id", Value: 1}})
+func (r *UserRepository) List(ctx context.Context, offset, limit int) ([]*domain.User, error) {
+	// _id breaks ties between users created in the same millisecond, so the
+	// order (and therefore paging) is stable.
+	opts := options.Find().
+		SetSort(bson.D{{Key: "created_at", Value: 1}, {Key: "_id", Value: 1}}).
+		SetSkip(int64(offset)).
+		SetLimit(int64(limit))
 	cur, err := r.coll.Find(ctx, bson.D{}, opts)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)

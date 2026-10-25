@@ -59,15 +59,19 @@ func (r *MemoryUserRepository) GetByEmail(_ context.Context, email string) (*dom
 	return nil, domain.ErrUserNotFound
 }
 
-func (r *MemoryUserRepository) List(_ context.Context) ([]*domain.User, error) {
+func (r *MemoryUserRepository) List(_ context.Context, offset, limit int) ([]*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]*domain.User, 0, len(r.users))
+	all := make([]*domain.User, 0, len(r.users))
 	for _, u := range r.users {
-		out = append(out, &u)
+		all = append(all, &u)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out, nil
+	// IDs are generated in increasing order, which matches creation order.
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	if offset >= len(all) {
+		return []*domain.User{}, nil
+	}
+	return all[offset:min(offset+limit, len(all))], nil
 }
 
 func (r *MemoryUserRepository) Update(_ context.Context, id string, update domain.UserUpdate) (*domain.User, error) {

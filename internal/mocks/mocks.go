@@ -16,7 +16,7 @@ type UserRepository struct {
 	CreateFn     func(ctx context.Context, user *domain.User) error
 	GetByIDFn    func(ctx context.Context, id string) (*domain.User, error)
 	GetByEmailFn func(ctx context.Context, email string) (*domain.User, error)
-	ListFn       func(ctx context.Context) ([]*domain.User, error)
+	ListFn       func(ctx context.Context, offset, limit int) ([]*domain.User, error)
 	UpdateFn     func(ctx context.Context, id string, update domain.UserUpdate) (*domain.User, error)
 	DeleteFn     func(ctx context.Context, id string) error
 	CountFn      func(ctx context.Context) (int64, error)
@@ -39,9 +39,9 @@ func (m *UserRepository) GetByEmail(ctx context.Context, email string) (*domain.
 	return m.GetByEmailFn(ctx, email)
 }
 
-func (m *UserRepository) List(ctx context.Context) ([]*domain.User, error) {
+func (m *UserRepository) List(ctx context.Context, offset, limit int) ([]*domain.User, error) {
 	must(m.ListFn != nil, "UserRepository.List")
-	return m.ListFn(ctx)
+	return m.ListFn(ctx, offset, limit)
 }
 
 func (m *UserRepository) Update(ctx context.Context, id string, update domain.UserUpdate) (*domain.User, error) {
@@ -105,9 +105,9 @@ func (m *TokenService) Verify(token string) (*port.TokenClaims, error) {
 type UserService struct {
 	CreateFn func(ctx context.Context, in port.CreateUserInput) (*domain.User, error)
 	GetFn    func(ctx context.Context, id string) (*domain.User, error)
-	ListFn   func(ctx context.Context) ([]*domain.User, error)
-	UpdateFn func(ctx context.Context, id string, update domain.UserUpdate) (*domain.User, error)
-	DeleteFn func(ctx context.Context, id string) error
+	ListFn   func(ctx context.Context, page domain.Page) (*port.UserPage, error)
+	UpdateFn func(ctx context.Context, actorID, id string, update domain.UserUpdate) (*domain.User, error)
+	DeleteFn func(ctx context.Context, actorID, id string) error
 	CountFn  func(ctx context.Context) (int64, error)
 }
 
@@ -123,19 +123,19 @@ func (m *UserService) Get(ctx context.Context, id string) (*domain.User, error) 
 	return m.GetFn(ctx, id)
 }
 
-func (m *UserService) List(ctx context.Context) ([]*domain.User, error) {
+func (m *UserService) List(ctx context.Context, page domain.Page) (*port.UserPage, error) {
 	must(m.ListFn != nil, "UserService.List")
-	return m.ListFn(ctx)
+	return m.ListFn(ctx, page)
 }
 
-func (m *UserService) Update(ctx context.Context, id string, update domain.UserUpdate) (*domain.User, error) {
+func (m *UserService) Update(ctx context.Context, actorID, id string, update domain.UserUpdate) (*domain.User, error) {
 	must(m.UpdateFn != nil, "UserService.Update")
-	return m.UpdateFn(ctx, id, update)
+	return m.UpdateFn(ctx, actorID, id, update)
 }
 
-func (m *UserService) Delete(ctx context.Context, id string) error {
+func (m *UserService) Delete(ctx context.Context, actorID, id string) error {
 	must(m.DeleteFn != nil, "UserService.Delete")
-	return m.DeleteFn(ctx, id)
+	return m.DeleteFn(ctx, actorID, id)
 }
 
 func (m *UserService) Count(ctx context.Context) (int64, error) {

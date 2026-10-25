@@ -21,6 +21,9 @@ type Config struct {
 	BcryptCost        int
 	UserCountInterval time.Duration
 	ShutdownTimeout   time.Duration
+	// IdempotencyRetention is how long Idempotency-Key results are kept; it
+	// must outlive the longest client retry window.
+	IdempotencyRetention time.Duration
 }
 
 // Load reads configuration from the environment, applying defaults. JWT_SECRET
@@ -47,6 +50,9 @@ func Load() (Config, error) {
 		errs = append(errs, err)
 	}
 	if cfg.ShutdownTimeout, err = durationEnv("SHUTDOWN_TIMEOUT", 15*time.Second); err != nil {
+		errs = append(errs, err)
+	}
+	if cfg.IdempotencyRetention, err = durationEnv("IDEMPOTENCY_RETENTION", 24*time.Hour); err != nil {
 		errs = append(errs, err)
 	}
 	if cfg.BcryptCost, err = intEnv("BCRYPT_COST", 12); err != nil {

@@ -99,7 +99,7 @@ func TestRecover(t *testing.T) {
 
 func TestHandler_InternalErrorIsHidden(t *testing.T) {
 	var logs bytes.Buffer
-	users := &mocks.UserService{ListFn: func(context.Context) ([]*domain.User, error) {
+	users := &mocks.UserService{ListFn: func(context.Context, domain.Page) (*port.UserPage, error) {
 		return nil, errors.New("connection refused: mongo-secret-host:27017")
 	}}
 	h := NewHandler(users, &mocks.AuthService{}, slog.New(slog.NewTextHandler(&logs, nil)))

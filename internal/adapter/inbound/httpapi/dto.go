@@ -33,8 +33,15 @@ type userResponse struct {
 }
 
 type listUsersResponse struct {
-	Data  []userResponse `json:"data"`
-	Total int            `json:"total"`
+	Data       []userResponse `json:"data"`
+	Pagination pagination     `json:"pagination"`
+}
+
+type pagination struct {
+	Page       int   `json:"page"`
+	PageSize   int   `json:"page_size"`
+	TotalItems int64 `json:"total_items"`
+	TotalPages int64 `json:"total_pages"`
 }
 
 type loginResponse struct {

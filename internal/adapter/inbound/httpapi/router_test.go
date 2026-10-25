@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -19,8 +20,8 @@ import (
 	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/mocks"
 )
 
-// newTestServer wires the real core services and JWT adapter against an
-// in-memory repository, so the full HTTP flow is exercised without MongoDB.
+// newTestServer wires the real core services and JWT adapter against
+// in-memory stores, so the full HTTP flow is exercised without MongoDB.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	repo := mocks.NewMemoryUserRepository()
@@ -34,7 +35,8 @@ func newTestServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(httpapi.NewRouter(users, auth, slog.New(slog.DiscardHandler)))
+	router := httpapi.NewRouter(users, auth, mocks.NewMemoryIdempotencyStore(), slog.New(slog.DiscardHandler))
+	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -45,7 +47,14 @@ type apiClient struct {
 	token string
 }
 
-func (c *apiClient) do(method, path, body string) (int, map[string]any) {
+type response struct {
+	status int
+	header http.Header
+	body   map[string]any
+	raw    string
+}
+
+func (c *apiClient) do(method, path, body string, headers ...string) response {
 	c.t.Helper()
 	var r io.Reader
 	if body != "" {
@@ -59,25 +68,50 @@ func (c *apiClient) do(method, path, body string) (int, map[string]any) {
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		c.t.Fatal(err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
-	var out map[string]any
-	if strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") && len(bytes.TrimSpace(raw)) > 0 {
-		if err := json.Unmarshal(raw, &out); err != nil {
+	out := response{status: resp.StatusCode, header: resp.Header, raw: string(raw)}
+	if len(bytes.TrimSpace(raw)) > 0 {
+		if !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+			c.t.Fatalf("%s %s: non-JSON response %q", method, path, raw)
+		}
+		if err := json.Unmarshal(raw, &out.body); err != nil {
 			c.t.Fatalf("%s %s: invalid JSON %q", method, path, raw)
 		}
 	}
-	return resp.StatusCode, out
+	return out
 }
 
-func errCode(body map[string]any) string {
-	e, _ := body["error"].(map[string]any)
+func (r response) errCode() string {
+	e, _ := r.body["error"].(map[string]any)
 	s, _ := e["code"].(string)
 	return s
+}
+
+func (c *apiClient) register(name, email string) string {
+	c.t.Helper()
+	res := c.do("POST", "/api/v1/auth/register", fmt.Sprintf(`{"name":%q,"email":%q,"password":"password123"}`, name, email))
+	if res.status != http.StatusCreated {
+		c.t.Fatalf("register %s = %d %v", email, res.status, res.body)
+	}
+	return res.body["id"].(string)
+}
+
+func (c *apiClient) login(email string) {
+	c.t.Helper()
+	c.token = ""
+	res := c.do("POST", "/api/v1/auth/login", fmt.Sprintf(`{"email":%q,"password":"password123"}`, email))
+	if res.status != http.StatusOK || res.body["token_type"] != "Bearer" {
+		c.t.Fatalf("login %s = %d %v", email, res.status, res.body)
+	}
+	c.token = res.body["access_token"].(string)
 }
 
 func TestAPI_FullFlow(t *testing.T) {
@@ -85,131 +119,213 @@ func TestAPI_FullFlow(t *testing.T) {
 	c := &apiClient{t: t, base: srv.URL}
 
 	// Register.
-	status, body := c.do("POST", "/api/v1/auth/register", `{"name":"Alice","email":"Alice@Example.com","password":"password123"}`)
-	if status != http.StatusCreated {
-		t.Fatalf("register status = %d, body = %v", status, body)
+	res := c.do("POST", "/api/v1/auth/register", `{"name":"Alice","email":"Alice@Example.com","password":"password123"}`)
+	if res.status != http.StatusCreated || res.body["email"] != "alice@example.com" {
+		t.Fatalf("register = %d %v", res.status, res.body)
 	}
-	aliceID, _ := body["id"].(string)
-	if aliceID == "" || body["email"] != "alice@example.com" {
-		t.Fatalf("register body = %v", body)
+	aliceID := res.body["id"].(string)
+	if res.header.Get("Location") != "/api/v1/users/"+aliceID {
+		t.Errorf("Location = %q", res.header.Get("Location"))
 	}
-	if _, leaked := body["password"]; leaked {
-		t.Fatal("password must not be returned")
-	}
-	if _, leaked := body["password_hash"]; leaked {
-		t.Fatal("password hash must not be returned")
-	}
-
-	// Duplicate email (case-insensitive).
-	if status, body = c.do("POST", "/api/v1/auth/register", `{"name":"A2","email":"ALICE@example.com","password":"password123"}`); status != http.StatusConflict {
-		t.Errorf("duplicate register status = %d, body = %v", status, body)
+	for _, leaked := range []string{"password", "password_hash"} {
+		if _, ok := res.body[leaked]; ok {
+			t.Fatalf("%s must not be returned", leaked)
+		}
 	}
 
-	// Invalid input.
-	status, body = c.do("POST", "/api/v1/auth/register", `{"name":"","email":"nope","password":"x"}`)
-	if status != http.StatusBadRequest || errCode(body) != "validation_error" {
-		t.Errorf("invalid register = %d %v", status, body)
+	// Duplicate email (case-insensitive) and invalid input.
+	if res = c.do("POST", "/api/v1/auth/register", `{"name":"A2","email":"ALICE@example.com","password":"password123"}`); res.status != http.StatusConflict {
+		t.Errorf("duplicate register = %d %v", res.status, res.body)
+	}
+	if res = c.do("POST", "/api/v1/auth/register", `{"name":"","email":"nope","password":"x"}`); res.status != http.StatusUnprocessableEntity || res.errCode() != "validation_error" {
+		t.Errorf("invalid register = %d %v", res.status, res.body)
 	}
 
 	// Login failures.
-	if status, _ = c.do("POST", "/api/v1/auth/login", `{"email":"alice@example.com","password":"wrong-pass"}`); status != http.StatusUnauthorized {
-		t.Errorf("wrong password status = %d", status)
+	if res = c.do("POST", "/api/v1/auth/login", `{"email":"alice@example.com","password":"wrong-pass"}`); res.status != http.StatusUnauthorized {
+		t.Errorf("wrong password = %d", res.status)
 	}
-	if status, _ = c.do("POST", "/api/v1/auth/login", `{"email":"bob@example.com","password":"password123"}`); status != http.StatusUnauthorized {
-		t.Errorf("unknown email status = %d", status)
+	if res = c.do("POST", "/api/v1/auth/login", `{"email":"bob@example.com","password":"password123"}`); res.status != http.StatusUnauthorized {
+		t.Errorf("unknown email = %d", res.status)
 	}
 
-	// Protected route without / with bad token.
-	if status, _ = c.do("GET", "/api/v1/users", ""); status != http.StatusUnauthorized {
-		t.Errorf("no token status = %d", status)
+	// Protected route without / with a bad token.
+	if res = c.do("GET", "/api/v1/users", ""); res.status != http.StatusUnauthorized {
+		t.Errorf("no token = %d", res.status)
 	}
 	c.token = "not.a.jwt"
-	if status, _ = c.do("GET", "/api/v1/users", ""); status != http.StatusUnauthorized {
-		t.Errorf("bad token status = %d", status)
+	if res = c.do("GET", "/api/v1/users", ""); res.status != http.StatusUnauthorized {
+		t.Errorf("bad token = %d", res.status)
 	}
 
-	// Login success.
-	c.token = ""
-	status, body = c.do("POST", "/api/v1/auth/login", `{"email":"alice@example.com","password":"password123"}`)
-	if status != http.StatusOK || body["token_type"] != "Bearer" {
-		t.Fatalf("login = %d %v", status, body)
+	// Alice creates Bob through the protected endpoint.
+	c.login("alice@example.com")
+	res = c.do("POST", "/api/v1/users", `{"name":"Bob","email":"bob@example.com","password":"password123"}`)
+	if res.status != http.StatusCreated {
+		t.Fatalf("create = %d %v", res.status, res.body)
 	}
-	c.token = body["access_token"].(string)
+	bobID := res.body["id"].(string)
 
-	// Create another user via protected endpoint.
-	status, body = c.do("POST", "/api/v1/users", `{"name":"Bob","email":"bob@example.com","password":"password123"}`)
-	if status != http.StatusCreated {
-		t.Fatalf("create = %d %v", status, body)
+	// List and get.
+	res = c.do("GET", "/api/v1/users", "")
+	if p, _ := res.body["pagination"].(map[string]any); res.status != http.StatusOK || p["total_items"] != float64(2) {
+		t.Errorf("list = %d %v", res.status, res.body)
 	}
-	bobID := body["id"].(string)
-
-	// List.
-	status, body = c.do("GET", "/api/v1/users", "")
-	if status != http.StatusOK || body["total"].(float64) != 2 {
-		t.Errorf("list = %d %v", status, body)
+	if res = c.do("GET", "/api/v1/users/"+bobID, ""); res.status != http.StatusOK || res.body["name"] != "Bob" {
+		t.Errorf("get = %d %v", res.status, res.body)
 	}
-
-	// Get.
-	if status, body = c.do("GET", "/api/v1/users/"+bobID, ""); status != http.StatusOK || body["name"] != "Bob" {
-		t.Errorf("get = %d %v", status, body)
-	}
-	if status, _ = c.do("GET", "/api/v1/users/does-not-exist", ""); status != http.StatusNotFound {
-		t.Errorf("get missing status = %d", status)
+	if res = c.do("GET", "/api/v1/users/does-not-exist", ""); res.status != http.StatusNotFound {
+		t.Errorf("get missing = %d", res.status)
 	}
 
-	// Update.
-	status, body = c.do("PATCH", "/api/v1/users/"+bobID, `{"name":"Robert","email":"robert@example.com"}`)
-	if status != http.StatusOK || body["name"] != "Robert" || body["email"] != "robert@example.com" {
-		t.Errorf("update = %d %v", status, body)
+	// Alice must not modify or delete Bob, whether or not the ID exists.
+	for _, id := range []string{bobID, "does-not-exist"} {
+		if res = c.do("PATCH", "/api/v1/users/"+id, `{"name":"Hacked"}`); res.status != http.StatusForbidden || res.errCode() != "forbidden" {
+			t.Errorf("PATCH other (%s) = %d %v", id, res.status, res.body)
+		}
+		if res = c.do("DELETE", "/api/v1/users/"+id, ""); res.status != http.StatusForbidden {
+			t.Errorf("DELETE other (%s) = %d %v", id, res.status, res.body)
+		}
 	}
-	if status, _ = c.do("PATCH", "/api/v1/users/"+bobID, `{"email":"alice@example.com"}`); status != http.StatusConflict {
-		t.Errorf("update to taken email status = %d", status)
-	}
-	if status, body = c.do("PATCH", "/api/v1/users/"+bobID, `{"password":"new-password"}`); status != http.StatusBadRequest {
-		t.Errorf("update with unknown field = %d %v", status, body)
-	}
-	if status, body = c.do("PATCH", "/api/v1/users/"+bobID, `{}`); status != http.StatusBadRequest || errCode(body) != "validation_error" {
-		t.Errorf("empty update = %d %v", status, body)
+	if res = c.do("GET", "/api/v1/users/"+bobID, ""); res.body["name"] != "Bob" {
+		t.Errorf("Bob was modified by Alice: %v", res.body)
 	}
 
-	// Delete.
-	if status, _ = c.do("DELETE", "/api/v1/users/"+bobID, ""); status != http.StatusNoContent {
-		t.Errorf("delete status = %d", status)
+	// Bob updates himself.
+	c.login("bob@example.com")
+	res = c.do("PATCH", "/api/v1/users/"+bobID, `{"name":"Robert","email":"robert@example.com"}`)
+	if res.status != http.StatusOK || res.body["name"] != "Robert" || res.body["email"] != "robert@example.com" {
+		t.Errorf("update = %d %v", res.status, res.body)
 	}
-	if status, _ = c.do("DELETE", "/api/v1/users/"+bobID, ""); status != http.StatusNotFound {
-		t.Errorf("second delete status = %d", status)
+	if res = c.do("PATCH", "/api/v1/users/"+bobID, `{"email":"alice@example.com"}`); res.status != http.StatusConflict {
+		t.Errorf("update to taken email = %d", res.status)
+	}
+	res = c.do("PATCH", "/api/v1/users/"+bobID, `{"password":"new-password"}`)
+	if f, _ := res.body["error"].(map[string]any)["fields"].(map[string]any); res.status != http.StatusBadRequest || f["password"] != "is not allowed" {
+		t.Errorf("update with unknown field = %d %v", res.status, res.body)
+	}
+	if res = c.do("PATCH", "/api/v1/users/"+bobID, `{}`); res.status != http.StatusUnprocessableEntity || res.errCode() != "validation_error" {
+		t.Errorf("empty update = %d %v", res.status, res.body)
 	}
 
-	// Deleting yourself invalidates your token.
-	if status, _ = c.do("DELETE", "/api/v1/users/"+aliceID, ""); status != http.StatusNoContent {
-		t.Errorf("self delete status = %d", status)
+	// Bob deletes himself; his token stops working immediately.
+	if res = c.do("DELETE", "/api/v1/users/"+bobID, ""); res.status != http.StatusNoContent {
+		t.Errorf("self delete = %d", res.status)
 	}
-	if status, _ = c.do("GET", "/api/v1/users", ""); status != http.StatusUnauthorized {
-		t.Errorf("token of deleted user status = %d", status)
+	if res = c.do("DELETE", "/api/v1/users/"+bobID, ""); res.status != http.StatusUnauthorized {
+		t.Errorf("delete retry with deleted user's token = %d", res.status)
 	}
 }
 
-func TestAPI_BadRequests(t *testing.T) {
+func TestAPI_Pagination(t *testing.T) {
+	srv := newTestServer(t)
+	c := &apiClient{t: t, base: srv.URL}
+	for i := range 5 {
+		c.register(fmt.Sprintf("User %d", i), fmt.Sprintf("user%d@example.com", i))
+	}
+	c.login("user0@example.com")
+
+	res := c.do("GET", "/api/v1/users?page=2&page_size=2", "")
+	data, _ := res.body["data"].([]any)
+	p, _ := res.body["pagination"].(map[string]any)
+	if res.status != http.StatusOK || len(data) != 2 {
+		t.Fatalf("page 2 = %d %v", res.status, res.body)
+	}
+	if first := data[0].(map[string]any); first["email"] != "user2@example.com" {
+		t.Errorf("page 2 starts with %v, want user2 (oldest first)", first["email"])
+	}
+	if p["page"] != float64(2) || p["page_size"] != float64(2) || p["total_items"] != float64(5) || p["total_pages"] != float64(3) {
+		t.Errorf("pagination = %v", p)
+	}
+
+	// Defaults.
+	res = c.do("GET", "/api/v1/users", "")
+	if p, _ := res.body["pagination"].(map[string]any); p["page"] != float64(1) || p["page_size"] != float64(20) {
+		t.Errorf("default pagination = %v", res.body["pagination"])
+	}
+	// Past the end.
+	if res = c.do("GET", "/api/v1/users?page=9", ""); res.status != http.StatusOK || len(res.body["data"].([]any)) != 0 {
+		t.Errorf("past end = %d %v", res.status, res.body)
+	}
+
+	for _, q := range []string{"page=0", "page=abc", "page_size=0", "page_size=101", "page_size=x"} {
+		if res = c.do("GET", "/api/v1/users?"+q, ""); res.status != http.StatusUnprocessableEntity || res.errCode() != "validation_error" {
+			t.Errorf("?%s = %d %v", q, res.status, res.body)
+		}
+	}
+}
+
+func TestAPI_IdempotentCreate(t *testing.T) {
+	srv := newTestServer(t)
+	c := &apiClient{t: t, base: srv.URL}
+	body := `{"name":"Carol","email":"carol@example.com","password":"password123"}`
+
+	first := c.do("POST", "/api/v1/auth/register", body, "Idempotency-Key", "reg-1")
+	retry := c.do("POST", "/api/v1/auth/register", body, "Idempotency-Key", "reg-1")
+	if first.status != http.StatusCreated || retry.status != http.StatusCreated {
+		t.Fatalf("first = %d, retry = %d %v", first.status, retry.status, retry.body)
+	}
+	if retry.body["id"] != first.body["id"] || retry.header.Get("Idempotent-Replayed") != "true" {
+		t.Errorf("retry did not replay the original response: %v %v", retry.body, retry.header)
+	}
+	if retry.header.Get("Location") != first.header.Get("Location") {
+		t.Errorf("replayed Location = %q", retry.header.Get("Location"))
+	}
+
+	// Without a key the retry is a new request and hits the unique email.
+	if res := c.do("POST", "/api/v1/auth/register", body); res.status != http.StatusConflict {
+		t.Errorf("retry without key = %d", res.status)
+	}
+	// Same key, different body.
+	if res := c.do("POST", "/api/v1/auth/register", `{"name":"Dave","email":"dave@example.com","password":"password123"}`, "Idempotency-Key", "reg-1"); res.status != http.StatusUnprocessableEntity || res.errCode() != "idempotency_key_reused" {
+		t.Errorf("reused key = %d %v", res.status, res.body)
+	}
+
+	// Keys on POST /users are scoped per caller: the same key from two users
+	// creates two users.
+	c.login("carol@example.com")
+	a := c.do("POST", "/api/v1/users", `{"name":"E","email":"e@example.com","password":"password123"}`, "Idempotency-Key", "same")
+	c.register("Frank", "frank@example.com")
+	c.login("frank@example.com")
+	b := c.do("POST", "/api/v1/users", `{"name":"E","email":"e@example.com","password":"password123"}`, "Idempotency-Key", "same")
+	if a.status != http.StatusCreated || b.status != http.StatusConflict || b.header.Get("Idempotent-Replayed") != "" {
+		t.Errorf("per-caller scoping: a=%d b=%d replayed=%q", a.status, b.status, b.header.Get("Idempotent-Replayed"))
+	}
+}
+
+func TestAPI_ErrorsAreAlwaysJSON(t *testing.T) {
 	srv := newTestServer(t)
 	c := &apiClient{t: t, base: srv.URL}
 
 	tests := []struct {
 		name, method, path, body string
 		want                     int
+		code                     string
 	}{
-		{"empty body", "POST", "/api/v1/auth/register", "", http.StatusBadRequest},
-		{"malformed JSON", "POST", "/api/v1/auth/register", `{"name":`, http.StatusBadRequest},
-		{"two objects", "POST", "/api/v1/auth/login", `{} {}`, http.StatusBadRequest},
-		{"too large", "POST", "/api/v1/auth/register", `{"name":"` + strings.Repeat("a", 2<<20) + `"}`, http.StatusBadRequest},
-		{"unknown route", "GET", "/nope", "", http.StatusNotFound},
-		{"wrong method", "PUT", "/api/v1/auth/login", "", http.StatusMethodNotAllowed},
-		{"health", "GET", "/healthz", "", http.StatusOK},
+		{"empty body", "POST", "/api/v1/auth/register", "", http.StatusBadRequest, "bad_request"},
+		{"malformed JSON", "POST", "/api/v1/auth/register", `{"name":`, http.StatusBadRequest, "bad_request"},
+		{"wrong type", "POST", "/api/v1/auth/register", `{"name":1}`, http.StatusBadRequest, "bad_request"},
+		{"two objects", "POST", "/api/v1/auth/login", `{} {}`, http.StatusBadRequest, "bad_request"},
+		{"too large", "POST", "/api/v1/auth/register", `{"name":"` + strings.Repeat("a", 2<<20) + `"}`, http.StatusBadRequest, "bad_request"},
+		{"unknown route", "GET", "/nope", "", http.StatusNotFound, "not_found"},
+		{"wrong method", "PUT", "/api/v1/auth/login", "", http.StatusMethodNotAllowed, "method_not_allowed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if status, body := c.do(tt.method, tt.path, tt.body); status != tt.want {
-				t.Errorf("status = %d, want %d (body %v)", status, tt.want, body)
+			res := c.do(tt.method, tt.path, tt.body)
+			if res.status != tt.want || res.errCode() != tt.code {
+				t.Errorf("got %d %q, want %d %q (body %s)", res.status, res.errCode(), tt.want, tt.code, res.raw)
+			}
+			if strings.Contains(res.raw, "json:") {
+				t.Errorf("response leaks encoding/json text: %s", res.raw)
 			}
 		})
+	}
+
+	if res := c.do("PUT", "/api/v1/auth/login", ""); res.header.Get("Allow") != "POST" {
+		t.Errorf("405 Allow = %q, want POST", res.header.Get("Allow"))
+	}
+	if res := c.do("GET", "/healthz", ""); res.status != http.StatusOK || res.body["status"] != "ok" {
+		t.Errorf("health = %d %v", res.status, res.body)
 	}
 }

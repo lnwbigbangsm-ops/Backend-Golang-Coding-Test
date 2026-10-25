@@ -68,15 +68,35 @@ func (s *UserService) Get(ctx context.Context, id string) (*domain.User, error) 
 	return s.repo.GetByID(ctx, id)
 }
 
-// List returns all users.
-func (s *UserService) List(ctx context.Context) ([]*domain.User, error) {
-	return s.repo.List(ctx)
+// List returns one page of users, oldest first.
+func (s *UserService) List(ctx context.Context, page domain.Page) (*port.UserPage, error) {
+	if err := page.Validate(); err != nil {
+		return nil, err
+	}
+	total, err := s.repo.Count(ctx)
+	if err != nil {
+		return nil, err
+	}
+	users, err := s.repo.List(ctx, page.Offset(), page.Size)
+	if err != nil {
+		return nil, err
+	}
+	return &port.UserPage{Users: users, Page: page, TotalItems: total}, nil
 }
 
-// Update changes a user's name and/or email.
-func (s *UserService) Update(ctx context.Context, id string, update domain.UserUpdate) (*domain.User, error) {
-	if id == "" {
-		return nil, domain.ErrUserNotFound
+// authorizeSelf allows users to modify only their own account. It runs before
+// any lookup, so a caller cannot probe whether another user's ID exists.
+func authorizeSelf(actorID, id string) error {
+	if actorID == "" || actorID != id {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
+// Update changes the caller's own name and/or email.
+func (s *UserService) Update(ctx context.Context, actorID, id string, update domain.UserUpdate) (*domain.User, error) {
+	if err := authorizeSelf(actorID, id); err != nil {
+		return nil, err
 	}
 
 	verr := &domain.ValidationError{}
@@ -101,10 +121,10 @@ func (s *UserService) Update(ctx context.Context, id string, update domain.UserU
 	return s.repo.Update(ctx, id, update)
 }
 
-// Delete removes a user.
-func (s *UserService) Delete(ctx context.Context, id string) error {
-	if id == "" {
-		return domain.ErrUserNotFound
+// Delete removes the caller's own account.
+func (s *UserService) Delete(ctx context.Context, actorID, id string) error {
+	if err := authorizeSelf(actorID, id); err != nil {
+		return err
 	}
 	return s.repo.Delete(ctx, id)
 }
