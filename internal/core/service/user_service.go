@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,6 +54,7 @@ func (s *UserService) Create(ctx context.Context, in port.CreateUserInput) (*dom
 		Email:        email,
 		PasswordHash: hash,
 		CreatedAt:    s.now().Truncate(time.Millisecond), // MongoDB stores millisecond precision
+		CreatedBy:    in.CreatedBy,
 	}
 	if err := s.repo.Create(ctx, user); err != nil {
 		return nil, err
@@ -84,18 +86,32 @@ func (s *UserService) List(ctx context.Context, page domain.Page) (*port.UserPag
 	return &port.UserPage{Users: users, Page: page, TotalItems: total}, nil
 }
 
-// authorizeSelf allows users to modify only their own account. It runs before
-// any lookup, so a caller cannot probe whether another user's ID exists.
-func authorizeSelf(actorID, id string) error {
-	if actorID == "" || actorID != id {
+// authorizeModify allows a change when the caller is the target user or the
+// user who created the target. Everything else, including a target that does
+// not exist, is ErrForbidden, so a caller cannot probe which IDs exist.
+func (s *UserService) authorizeModify(ctx context.Context, actorID, id string) error {
+	if actorID == "" || id == "" {
+		return domain.ErrForbidden
+	}
+	if actorID == id {
+		return nil
+	}
+	target, err := s.repo.GetByID(ctx, id)
+	if errors.Is(err, domain.ErrUserNotFound) {
+		return domain.ErrForbidden
+	}
+	if err != nil {
+		return err
+	}
+	if target.CreatedBy != actorID {
 		return domain.ErrForbidden
 	}
 	return nil
 }
 
-// Update changes the caller's own name and/or email.
+// Update changes a user's name and/or email.
 func (s *UserService) Update(ctx context.Context, actorID, id string, update domain.UserUpdate) (*domain.User, error) {
-	if err := authorizeSelf(actorID, id); err != nil {
+	if err := s.authorizeModify(ctx, actorID, id); err != nil {
 		return nil, err
 	}
 
@@ -121,9 +137,9 @@ func (s *UserService) Update(ctx context.Context, actorID, id string, update dom
 	return s.repo.Update(ctx, id, update)
 }
 
-// Delete removes the caller's own account.
+// Delete removes a user.
 func (s *UserService) Delete(ctx context.Context, actorID, id string) error {
-	if err := authorizeSelf(actorID, id); err != nil {
+	if err := s.authorizeModify(ctx, actorID, id); err != nil {
 		return err
 	}
 	return s.repo.Delete(ctx, id)

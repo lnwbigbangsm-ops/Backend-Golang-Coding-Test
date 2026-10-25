@@ -59,9 +59,12 @@ func TestUserRepository_Integration(t *testing.T) {
 		t.Errorf("GetByEmail err = %v", err)
 	}
 
-	bob := &domain.User{Name: "Bob", Email: "bob@example.com", PasswordHash: "h", CreatedAt: now.Add(time.Second)}
+	bob := &domain.User{Name: "Bob", Email: "bob@example.com", PasswordHash: "h", CreatedAt: now.Add(time.Second), CreatedBy: alice.ID}
 	if err := repo.Create(ctx, bob); err != nil {
 		t.Fatal(err)
+	}
+	if got, err := repo.GetByID(ctx, bob.ID); err != nil || got.CreatedBy != alice.ID {
+		t.Errorf("CreatedBy round trip = %+v, %v", got, err)
 	}
 	if users, err := repo.List(ctx, 0, 10); err != nil || len(users) != 2 || users[0].ID != alice.ID {
 		t.Errorf("List = %v, %v", users, err)

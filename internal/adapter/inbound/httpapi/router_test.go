@@ -178,8 +178,15 @@ func TestAPI_FullFlow(t *testing.T) {
 		t.Errorf("get missing = %d", res.status)
 	}
 
-	// Alice must not modify or delete Bob, whether or not the ID exists.
-	for _, id := range []string{bobID, "does-not-exist"} {
+	// Alice created Bob, so she may update him.
+	if res = c.do("PATCH", "/api/v1/users/"+bobID, `{"name":"Bobby"}`); res.status != http.StatusOK || res.body["name"] != "Bobby" {
+		t.Errorf("creator PATCH = %d %v", res.status, res.body)
+	}
+
+	// Carol registered herself: Alice may not modify or delete her, and a
+	// missing ID gets the same 403 so IDs cannot be probed.
+	carolID := c.register("Carol", "carol@example.com")
+	for _, id := range []string{carolID, "does-not-exist"} {
 		if res = c.do("PATCH", "/api/v1/users/"+id, `{"name":"Hacked"}`); res.status != http.StatusForbidden || res.errCode() != "forbidden" {
 			t.Errorf("PATCH other (%s) = %d %v", id, res.status, res.body)
 		}
@@ -187,15 +194,18 @@ func TestAPI_FullFlow(t *testing.T) {
 			t.Errorf("DELETE other (%s) = %d %v", id, res.status, res.body)
 		}
 	}
-	if res = c.do("GET", "/api/v1/users/"+bobID, ""); res.body["name"] != "Bob" {
-		t.Errorf("Bob was modified by Alice: %v", res.body)
+	if res = c.do("GET", "/api/v1/users/"+carolID, ""); res.body["name"] != "Carol" {
+		t.Errorf("Carol was modified by Alice: %v", res.body)
 	}
 
-	// Bob updates himself.
+	// Bob updates himself; Bob did not create Alice, so he cannot touch her.
 	c.login("bob@example.com")
 	res = c.do("PATCH", "/api/v1/users/"+bobID, `{"name":"Robert","email":"robert@example.com"}`)
 	if res.status != http.StatusOK || res.body["name"] != "Robert" || res.body["email"] != "robert@example.com" {
 		t.Errorf("update = %d %v", res.status, res.body)
+	}
+	if res = c.do("DELETE", "/api/v1/users/"+aliceID, ""); res.status != http.StatusForbidden {
+		t.Errorf("created user deleting its creator = %d", res.status)
 	}
 	if res = c.do("PATCH", "/api/v1/users/"+bobID, `{"email":"alice@example.com"}`); res.status != http.StatusConflict {
 		t.Errorf("update to taken email = %d", res.status)
@@ -214,6 +224,22 @@ func TestAPI_FullFlow(t *testing.T) {
 	}
 	if res = c.do("DELETE", "/api/v1/users/"+bobID, ""); res.status != http.StatusUnauthorized {
 		t.Errorf("delete retry with deleted user's token = %d", res.status)
+	}
+
+	// The creator can delete an account they created; a retry then gets 403
+	// (the target no longer exists, which is reported like any other target
+	// the caller may not touch).
+	c.login("alice@example.com")
+	res = c.do("POST", "/api/v1/users", `{"name":"Dan","email":"dan@example.com","password":"password123"}`)
+	danID := res.body["id"].(string)
+	if res = c.do("DELETE", "/api/v1/users/"+danID, ""); res.status != http.StatusNoContent {
+		t.Errorf("creator DELETE = %d %v", res.status, res.body)
+	}
+	if res = c.do("GET", "/api/v1/users/"+danID, ""); res.status != http.StatusNotFound {
+		t.Errorf("deleted user still readable: %d", res.status)
+	}
+	if res = c.do("DELETE", "/api/v1/users/"+danID, ""); res.status != http.StatusForbidden {
+		t.Errorf("creator DELETE retry = %d", res.status)
 	}
 }
 

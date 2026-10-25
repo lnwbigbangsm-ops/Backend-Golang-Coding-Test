@@ -80,6 +80,9 @@ type CreateUserInput struct {
 	Name     string
 	Email    string
 	Password string
+	// CreatedBy is the authenticated caller creating the account, or "" for
+	// self-registration.
+	CreatedBy string
 }
 
 // LoginResult is returned after successful authentication.
@@ -98,7 +101,8 @@ type UserPage struct {
 }
 
 // UserService is the use-case API for managing users. actorID is the
-// authenticated caller; users may only modify their own account.
+// authenticated caller, who may modify only their own account or an account
+// they created.
 type UserService interface {
 	Create(ctx context.Context, in CreateUserInput) (*domain.User, error)
 	Get(ctx context.Context, id string) (*domain.User, error)

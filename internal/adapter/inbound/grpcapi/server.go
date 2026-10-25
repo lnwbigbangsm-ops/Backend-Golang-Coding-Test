@@ -38,8 +38,13 @@ func NewServer(users port.UserService, auth port.AuthService, logger *slog.Logge
 }
 
 func (s *Server) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.CreateUserResponse, error) {
+	// Same rule as REST POST /users: the authenticated caller becomes the creator.
+	var creator string
+	if c, ok := ctx.Value(claimsKey{}).(*port.TokenClaims); ok {
+		creator = c.UserID
+	}
 	user, err := s.users.Create(ctx, port.CreateUserInput{
-		Name: req.GetName(), Email: req.GetEmail(), Password: req.GetPassword(),
+		Name: req.GetName(), Email: req.GetEmail(), Password: req.GetPassword(), CreatedBy: creator,
 	})
 	if err != nil {
 		return nil, s.toStatus(ctx, err)
@@ -81,7 +86,11 @@ func (s *Server) toStatus(ctx context.Context, err error) error {
 	}
 }
 
-// AuthInterceptor requires an "authorization: Bearer <jwt>" metadata entry.
+// claimsKey stores the authenticated caller's claims in the call context.
+type claimsKey struct{}
+
+// AuthInterceptor requires an "authorization: Bearer <jwt>" metadata entry
+// and puts the verified claims into the call context.
 func AuthInterceptor(auth port.AuthService) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		md, _ := metadata.FromIncomingContext(ctx)
@@ -93,13 +102,14 @@ func AuthInterceptor(auth port.AuthService) grpc.UnaryServerInterceptor {
 		if !found || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
 			return nil, status.Error(codes.Unauthenticated, "malformed authorization metadata")
 		}
-		if _, err := auth.Authenticate(ctx, strings.TrimSpace(token)); err != nil {
+		claims, err := auth.Authenticate(ctx, strings.TrimSpace(token))
+		if err != nil {
 			if errors.Is(err, domain.ErrInvalidToken) {
 				return nil, status.Error(codes.Unauthenticated, "invalid or expired token")
 			}
 			return nil, status.Error(codes.Internal, "internal error")
 		}
-		return handler(ctx, req)
+		return handler(context.WithValue(ctx, claimsKey{}, claims), req)
 	}
 }
 

@@ -49,7 +49,7 @@ func writeError(w http.ResponseWriter, r *http.Request, logger *slog.Logger, err
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 		writeErrorCode(w, http.StatusUnauthorized, "unauthorized", "invalid or expired token")
 	case errors.Is(err, domain.ErrForbidden):
-		writeErrorCode(w, http.StatusForbidden, "forbidden", "you can only modify your own account")
+		writeErrorCode(w, http.StatusForbidden, "forbidden", "you can only modify your own account or accounts you created")
 	default:
 		logger.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 		writeErrorCode(w, http.StatusInternalServerError, "internal_error", "internal server error")

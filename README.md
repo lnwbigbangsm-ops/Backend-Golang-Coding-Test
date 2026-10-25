@@ -39,7 +39,7 @@ A RESTful (and gRPC) user management service in Go, backed by MongoDB, with JWT 
 | **Bonus:** graceful shutdown with `context.Context` | `cmd/api/main.go` |
 | **Bonus:** gRPC `CreateUser` / `GetUser`, secured with token metadata | `api/proto/user/v1/user.proto`, `internal/adapter/inbound/grpcapi` |
 | **Bonus:** hexagonal architecture | see below |
-| Object-level authorization (users may modify only their own account) | `service.authorizeSelf` |
+| Object-level authorization (modify only your own account or accounts you created) | `UserService.authorizeModify` |
 | Pagination on `GET /users` | `domain.Page`, `httpapi.parsePage` |
 | `Idempotency-Key` support on create endpoints | `httpapi.Idempotency`, `mongodb.IdempotencyStore` |
 | OpenAPI 3.1 contract for the REST API | `api/openapi.yaml` |
@@ -210,10 +210,16 @@ Base URL: `http://localhost:8080`. All bodies are JSON. Unknown JSON fields are 
 | `POST` | `/api/v1/users` | JWT | Create a user | `201` |
 | `GET` | `/api/v1/users?page=1&page_size=20` | JWT | List users, oldest first, paginated | `200` |
 | `GET` | `/api/v1/users/{id}` | JWT | Get a user by ID | `200` |
-| `PATCH` | `/api/v1/users/{id}` | JWT, **own account only** | Update name and/or email | `200` |
-| `DELETE` | `/api/v1/users/{id}` | JWT, **own account only** | Delete your account | `204` |
+| `PATCH` | `/api/v1/users/{id}` | JWT, **owner or creator** | Update name and/or email | `200` |
+| `DELETE` | `/api/v1/users/{id}` | JWT, **owner or creator** | Delete a user | `204` |
 
-**Authorization.** Any authenticated user may read users. `PATCH` and `DELETE` are allowed only when `{id}` is the caller's own ID (the token's `sub`). For any other `{id}` they return `403`, whether or not that user exists, so the response does not reveal which IDs exist.
+**Authorization.**
+
+- Any authenticated user may read users.
+- `PATCH` and `DELETE` are allowed when `{id}` is either the caller's own account (the token's `sub`), or an account the caller created through `POST /api/v1/users`. The creator is recorded internally and not exposed.
+- Anyone else gets `403`, even when `{id}` does not exist, so the response never reveals which IDs exist.
+
+For example, you log in, create a user, then update or delete that user: this works. Another self-registered user cannot be touched.
 
 **Pagination.** `page` (default 1) and `page_size` (default 20, max 100). Results are ordered by `created_at` ascending, with ties broken by ID, so pages are stable. A page past the end returns an empty `data` array.
 
@@ -225,7 +231,7 @@ Base URL: `http://localhost:8080`. All bodies are JSON. Unknown JSON fields are 
 | `POST /auth/login` | Yes | Each call issues a new token |
 | `PATCH /users/{id}` | Yes | Idempotent: same body, same result |
 | `POST /auth/register`, `POST /users` | **Only with `Idempotency-Key`** | Without a key, a retry after a lost response returns `409 email_exists`, which cannot be told apart from a genuine conflict. See below. |
-| `DELETE /users/{id}` | Yes, with care | Deleting revokes the caller's tokens, so a retry after a lost `204` returns `401`. Treat `401` on a retried `DELETE` as "already deleted". |
+| `DELETE /users/{id}` | Yes, with care | A retry after a lost `204` returns `401` if you deleted yourself (your tokens are revoked), or `403` if you deleted an account you created (it no longer exists). Treat either on a retried `DELETE` as "already deleted". |
 
 **`Idempotency-Key`** (optional header on both create endpoints, at most 255 characters):
 
@@ -373,22 +379,24 @@ curl -s localhost:8080/api/v1/users/671b1f2a8c3a4d2b9e5f7a11 -H "Authorization: 
 {"id":"671b1f2a8c3a4d2b9e5f7a11","name":"Bob","email":"bob@example.com","created_at":"2026-10-25T08:01:00Z"}
 ```
 
-**Update your own account** (send `name`, `email` or both; `$TOKEN` is Alice's)
+**Update a user you created** (send `name`, `email` or both; `$TOKEN` is Alice's, and Alice created Bob above)
 
 ```bash
-curl -s -X PATCH localhost:8080/api/v1/users/671b1f0e8c3a4d2b9e5f7a10 \
+curl -s -X PATCH localhost:8080/api/v1/users/671b1f2a8c3a4d2b9e5f7a11 \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Alice Smith"}'
+  -d '{"name":"Robert"}'
 ```
 
 ```json
-{"id":"671b1f0e8c3a4d2b9e5f7a10","name":"Alice Smith","email":"alice@example.com","created_at":"2026-10-25T08:00:00Z"}
+{"id":"671b1f2a8c3a4d2b9e5f7a11","name":"Robert","email":"bob@example.com","created_at":"2026-10-25T08:01:00Z"}
 ```
 
-**Update someone else's account**
+Updating your own account works the same way with your own ID.
+
+**Update an account that is neither yours nor created by you**
 
 ```bash
-curl -i -X PATCH localhost:8080/api/v1/users/671b1f2a8c3a4d2b9e5f7a11 \
+curl -i -X PATCH localhost:8080/api/v1/users/671b1f4c8c3a4d2b9e5f7a12 \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"Hacked"}'
 ```
@@ -396,7 +404,7 @@ curl -i -X PATCH localhost:8080/api/v1/users/671b1f2a8c3a4d2b9e5f7a11 \
 ```http
 HTTP/1.1 403 Forbidden
 
-{"error":{"code":"forbidden","message":"you can only modify your own account"}}
+{"error":{"code":"forbidden","message":"you can only modify your own account or accounts you created"}}
 ```
 
 **Update with a field that cannot be changed**
@@ -407,10 +415,10 @@ HTTP/1.1 400 Bad Request
 {"error":{"code":"bad_request","message":"request body contains an unknown field","fields":{"password":"is not allowed"}}}
 ```
 
-**Delete your own account**
+**Delete a user you created** (or your own account)
 
 ```bash
-curl -i -X DELETE localhost:8080/api/v1/users/671b1f0e8c3a4d2b9e5f7a10 -H "Authorization: Bearer $TOKEN"
+curl -i -X DELETE localhost:8080/api/v1/users/671b1f2a8c3a4d2b9e5f7a11 -H "Authorization: Bearer $TOKEN"
 ```
 
 ```http
@@ -510,8 +518,9 @@ MONGO_TEST_URI=mongodb://localhost:27017 go test ./internal/adapter/outbound/mon
 
 The compiled server was also run against a real MongoDB 9.0 instance and exercised with `curl`, `grpcurl` and a scripted client. The client validated **every response against `api/openapi.yaml`**, using `libopenapi-validator`. The following behaviours were confirmed:
 
-- **31 REST cases** returned the documented status code, with zero spec mismatches and no server errors:
-  - success paths, `400`, `401`, `403` (including on non-existent IDs), `404`, `405` with `Allow`, `409` and `422`
+- **36 REST cases** returned the documented status code, with zero spec mismatches and no server errors:
+  - success paths, `400`, `401`, `404`, `405` with `Allow`, `409` and `422`
+  - authorization: the owner and the creator may modify; anyone else gets `403`, including on non-existent IDs
   - pagination across pages
   - `Idempotency-Key` replay and reuse with a different body
 - gRPC `CreateUser` / `GetUser` work with a REST-issued token, and calls without one are rejected with `Unauthenticated`.
@@ -554,7 +563,10 @@ The compiled server was also run against a real MongoDB 9.0 instance and exercis
 **Scope assumptions**
 
 - **`POST /auth/register` and `POST /users`** both create a user. The first is public self-sign-up; the second is an authenticated "admin creates user" operation. Both share the same use case.
-- **Authorization**: any authenticated user may read users, but may update or delete only their own account (`403` otherwise). The check lives in the service layer, so every transport gets it. An admin role would be added as a `role` claim plus one extra rule in `authorizeSelf`.
+- **Authorization**: any authenticated user may read users. Updating or deleting is allowed for the account owner and for the user who created the account through `POST /users`; this supports the natural "create a user, then manage it" flow while still protecting everyone else (`403`).
+  - The creator is stored as `created_by` and not exposed in responses.
+  - The check lives in the service layer, so every transport gets it.
+  - An admin role would be a `role` claim plus one extra rule in `authorizeModify`.
 - **Password changes** are out of scope. `PATCH` accepts only `name` and `email`, as the spec states; any other field is rejected with `400`.
 - **"List all users" is paginated** (default 20, max 100), so the response size stays bounded as the user base grows. Offset paging is used because the list is small and ordered by an indexed key (`created_at`, `_id`). A cursor would replace it if deep pages became slow.
 - **The user-count job** runs as a goroutine with a `time.Ticker`. It stops when the shutdown context is cancelled, and each count has a timeout so a slow database cannot pile up ticks.

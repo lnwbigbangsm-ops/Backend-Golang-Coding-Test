@@ -149,21 +149,69 @@ func TestUserService_List_InvalidPage(t *testing.T) {
 	}
 }
 
-func TestUserService_OnlyOwnerCanModify(t *testing.T) {
-	s := newTestUserService(&mocks.UserRepository{}, &mocks.PasswordHasher{}) // repo must not be called
-	name := "Mallory"
-	for _, actor := range []string{"someone-else", ""} {
-		if _, err := s.Update(context.Background(), actor, "id-1", domain.UserUpdate{Name: &name}); !errors.Is(err, domain.ErrForbidden) {
-			t.Errorf("Update by %q err = %v, want ErrForbidden", actor, err)
-		}
-		if err := s.Delete(context.Background(), actor, "id-1"); !errors.Is(err, domain.ErrForbidden) {
-			t.Errorf("Delete by %q err = %v, want ErrForbidden", actor, err)
-		}
+func TestUserService_Authorization(t *testing.T) {
+	boom := errors.New("db down")
+	repo := &mocks.UserRepository{
+		GetByIDFn: func(_ context.Context, id string) (*domain.User, error) {
+			switch id {
+			case "child":
+				return &domain.User{ID: id, CreatedBy: "creator"}, nil
+			case "self-registered":
+				return &domain.User{ID: id}, nil
+			case "broken":
+				return nil, boom
+			}
+			return nil, domain.ErrUserNotFound
+		},
+		UpdateFn: func(_ context.Context, id string, _ domain.UserUpdate) (*domain.User, error) {
+			return &domain.User{ID: id}, nil
+		},
+		DeleteFn: func(context.Context, string) error { return nil },
 	}
+	s := newTestUserService(repo, &mocks.PasswordHasher{})
+	name := "New Name"
+
+	tests := []struct {
+		name, actor, target string
+		want                error
+	}{
+		{"owner", "child", "child", nil},
+		{"creator", "creator", "child", nil},
+		{"stranger", "stranger", "child", domain.ErrForbidden},
+		{"no creator recorded", "creator", "self-registered", domain.ErrForbidden},
+		{"missing target looks the same as forbidden", "creator", "missing", domain.ErrForbidden},
+		{"unauthenticated", "", "child", domain.ErrForbidden},
+		{"repository error is not hidden", "creator", "broken", boom},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := s.Update(context.Background(), tt.actor, tt.target, domain.UserUpdate{Name: &name})
+			if !errors.Is(err, tt.want) && !(tt.want == nil && err == nil) {
+				t.Errorf("Update err = %v, want %v", err, tt.want)
+			}
+			err = s.Delete(context.Background(), tt.actor, tt.target)
+			if !errors.Is(err, tt.want) && !(tt.want == nil && err == nil) {
+				t.Errorf("Delete err = %v, want %v", err, tt.want)
+			}
+		})
+	}
+
 	// Authorization is checked before validation, so invalid input from a
-	// non-owner still yields 403 and reveals nothing.
-	if _, err := s.Update(context.Background(), "someone-else", "id-1", domain.UserUpdate{}); !errors.Is(err, domain.ErrForbidden) {
-		t.Errorf("empty update by non-owner err = %v, want ErrForbidden", err)
+	// stranger still yields 403 and reveals nothing.
+	if _, err := s.Update(context.Background(), "stranger", "child", domain.UserUpdate{}); !errors.Is(err, domain.ErrForbidden) {
+		t.Errorf("empty update by stranger err = %v, want ErrForbidden", err)
+	}
+}
+
+func TestUserService_Create_RecordsCreator(t *testing.T) {
+	var stored *domain.User
+	repo := &mocks.UserRepository{CreateFn: func(_ context.Context, u *domain.User) error { stored = u; return nil }}
+	s := newTestUserService(repo, &mocks.PasswordHasher{})
+	_, err := s.Create(context.Background(), port.CreateUserInput{
+		Name: "Bob", Email: "bob@example.com", Password: "password123", CreatedBy: "alice-id",
+	})
+	if err != nil || stored.CreatedBy != "alice-id" {
+		t.Errorf("CreatedBy = %q, err = %v", stored.CreatedBy, err)
 	}
 }
 

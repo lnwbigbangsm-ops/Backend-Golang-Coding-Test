@@ -27,6 +27,7 @@ type userDocument struct {
 	Email        string        `bson:"email"`
 	PasswordHash string        `bson:"password_hash"`
 	CreatedAt    time.Time     `bson:"created_at"`
+	CreatedBy    string        `bson:"created_by,omitempty"`
 }
 
 func (d *userDocument) toDomain() *domain.User {
@@ -36,6 +37,7 @@ func (d *userDocument) toDomain() *domain.User {
 		Email:        d.Email,
 		PasswordHash: d.PasswordHash,
 		CreatedAt:    d.CreatedAt.UTC(),
+		CreatedBy:    d.CreatedBy,
 	}
 }
 
@@ -71,6 +73,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) error {
 		Email:        user.Email,
 		PasswordHash: user.PasswordHash,
 		CreatedAt:    user.CreatedAt,
+		CreatedBy:    user.CreatedBy,
 	}
 	if _, err := r.coll.InsertOne(ctx, doc); err != nil {
 		if mongo.IsDuplicateKeyError(err) {

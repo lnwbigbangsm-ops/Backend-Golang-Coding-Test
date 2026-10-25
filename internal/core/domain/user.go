@@ -24,6 +24,10 @@ type User struct {
 	Email        string
 	PasswordHash string
 	CreatedAt    time.Time
+	// CreatedBy is the ID of the user who created this account through
+	// POST /users, or "" for self-registered accounts. That creator may also
+	// update and delete the account.
+	CreatedBy string
 }
 
 // UserUpdate describes a partial update; nil fields are left unchanged.

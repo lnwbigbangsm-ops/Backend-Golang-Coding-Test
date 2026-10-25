@@ -36,7 +36,11 @@ func (h *Handler) createWith(w http.ResponseWriter, r *http.Request, create func
 		writeError(w, r, h.logger, err)
 		return
 	}
-	user, err := create(r.Context(), port.CreateUserInput(req))
+	// actorID is "" on the public register route and the caller on POST /users,
+	// which makes the caller the account's creator.
+	user, err := create(r.Context(), port.CreateUserInput{
+		Name: req.Name, Email: req.Email, Password: req.Password, CreatedBy: actorID(r),
+	})
 	if err != nil {
 		writeError(w, r, h.logger, err)
 		return

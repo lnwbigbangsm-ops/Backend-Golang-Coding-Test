@@ -126,11 +126,12 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     patch:
-      summary: Update your own name and/or email
+      summary: Update a user's name and/or email
       description: |
-        Only fields present in the body change. Callers may only update their
-        own account (`id` must equal the token's `sub`); otherwise 403 is
-        returned whether or not `id` exists. Idempotent: safe to retry.
+        Only fields present in the body change. Allowed for the account owner
+        (`id` equals the token's `sub`) and for the user who created the
+        account through `POST /api/v1/users`. Anyone else gets 403, whether or
+        not `id` exists. Idempotent: safe to retry.
       requestBody:
         required: true
         content:
@@ -154,11 +155,14 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { $ref: "#/components/responses/Unprocessable" }
     delete:
-      summary: Delete your own account
+      summary: Delete a user
       description: |
-        Callers may only delete their own account. Deleting revokes the
-        caller's tokens immediately, so a retry after a lost response returns
-        401; treat 401 on a retried DELETE as "already deleted".
+        Allowed for the account owner and for the user who created the
+        account; anyone else gets 403, whether or not `id` exists. Not
+        idempotent at the status level: a retry after a lost 204 returns 401
+        (you deleted yourself, so your token is revoked) or 403 (the account
+        you created no longer exists). Treat either on a retried DELETE as
+        "already deleted".
       responses:
         "204": { description: Deleted }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -292,7 +296,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
-      description: Authenticated, but the target is another user's account
+      description: Authenticated, but the target is neither your account nor one you created (or does not exist)
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
