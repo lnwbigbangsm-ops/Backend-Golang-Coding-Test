@@ -2,14 +2,14 @@
 
 | Part | Deliverable |
 | --- | --- |
-| 1. User Management API | Code in this repository; documented below |
-| 2. Lottery Search System | Design proposal: [docs/lottery-search-design.md](docs/lottery-search-design.md) |
+| 1. User Management API | Code in this repository; see [Part 1](#part-1-user-management-api) |
+| 2. Lottery Search System | Design only (no code): summary in [Part 2](#part-2-lottery-search-system), full design in [docs/lottery-search-design.md](docs/lottery-search-design.md) |
 
 ## Part 1: User Management API
 
 A RESTful (and gRPC) user management service in Go, backed by MongoDB, with JWT (HS256) authentication. It uses a hexagonal (ports and adapters) structure.
 
-## Contents
+### Contents
 
 - [Features](#features)
 - [Project structure](#project-structure)
@@ -21,7 +21,7 @@ A RESTful (and gRPC) user management service in Go, backed by MongoDB, with JWT 
 - [Testing](#testing)
 - [Design decisions and assumptions](#design-decisions-and-assumptions)
 
-## Features
+### Features
 
 | Requirement | Where |
 | --- | --- |
@@ -40,7 +40,7 @@ A RESTful (and gRPC) user management service in Go, backed by MongoDB, with JWT 
 | **Bonus:** gRPC `CreateUser` / `GetUser`, secured with token metadata | `api/proto/user/v1/user.proto`, `internal/adapter/inbound/grpcapi` |
 | **Bonus:** hexagonal architecture | see below |
 
-## Project structure
+### Project structure
 
 ```text
 .
@@ -66,9 +66,9 @@ A RESTful (and gRPC) user management service in Go, backed by MongoDB, with JWT 
 
 Dependencies point inward only: `adapter → core/port ← core/service → core/domain`. The core never imports MongoDB, `net/http`, gRPC or JWT libraries, so any adapter can be swapped or mocked.
 
-## Quick start
+### Quick start
 
-### Option A: Docker Compose (API + MongoDB)
+#### Option A: Docker Compose (API + MongoDB)
 
 ```bash
 cp .env.example .env          # then set JWT_SECRET to a random value (≥ 32 bytes)
@@ -79,7 +79,7 @@ docker compose up --build
 - gRPC: `localhost:9090`
 - MongoDB: `localhost:27017`
 
-### Option B: run locally
+#### Option B: run locally
 
 Requires Go 1.27+ and a running MongoDB.
 
@@ -107,7 +107,7 @@ Every 10 seconds the log shows:
 
 Press `Ctrl+C` (SIGINT) or send SIGTERM to shut down gracefully. In-flight HTTP and gRPC requests are drained, the background job stops, and the MongoDB client disconnects.
 
-## Configuration
+### Configuration
 
 All settings come from environment variables.
 
@@ -124,9 +124,9 @@ All settings come from environment variables.
 | `USER_COUNT_INTERVAL` | `10s` | Interval of the user-count log job. |
 | `SHUTDOWN_TIMEOUT` | `15s` | Maximum time to drain requests on shutdown. |
 
-## JWT guide
+### JWT guide
 
-### 1. Get a token
+#### 1. Get a token
 
 Register (once), then log in:
 
@@ -154,7 +154,7 @@ curl -s -X POST localhost:8080/api/v1/auth/login \
 }
 ```
 
-### 2. Use the token
+#### 2. Use the token
 
 Send it in the `Authorization` header on every `/api/v1/users` request:
 
@@ -168,7 +168,7 @@ curl -s localhost:8080/api/v1/users -H "Authorization: Bearer $TOKEN"
 
 For gRPC, send the same value as the `authorization` metadata key.
 
-### 3. What is inside the token
+#### 3. What is inside the token
 
 Header `{"alg":"HS256","typ":"JWT"}`; payload:
 
@@ -180,7 +180,7 @@ Header `{"alg":"HS256","typ":"JWT"}`; payload:
 | `iat`, `nbf` | Issued-at / not-before |
 | `exp` | Expiry (`iat + JWT_TTL`) |
 
-### 4. How tokens are validated
+#### 4. How tokens are validated
 
 The middleware rejects a request with `401` and `WWW-Authenticate: Bearer` when:
 
@@ -190,7 +190,7 @@ The middleware rejects a request with `401` and `WWW-Authenticate: Bearer` when:
 - `exp` is missing or in the past, `iat` is in the future, or `iss` is wrong
 - the user in `sub` no longer exists (deleting a user revokes their tokens immediately)
 
-## REST API
+### REST API
 
 Base URL: `http://localhost:8080`. All bodies are JSON. Unknown JSON fields are rejected, and bodies are limited to 1 MiB.
 
@@ -205,7 +205,7 @@ Base URL: `http://localhost:8080`. All bodies are JSON. Unknown JSON fields are 
 | `PATCH` | `/api/v1/users/{id}` | JWT | Update name and/or email | `200` |
 | `DELETE` | `/api/v1/users/{id}` | JWT | Delete a user | `204` |
 
-### Validation rules
+#### Validation rules
 
 | Field | Rule |
 | --- | --- |
@@ -213,7 +213,7 @@ Base URL: `http://localhost:8080`. All bodies are JSON. Unknown JSON fields are 
 | `email` | Required, valid address (`local@domain.tld`), trimmed and lower-cased, unique |
 | `password` | Required, 8 characters to 72 bytes (bcrypt limit) |
 
-### Error format
+#### Error format
 
 ```json
 {
@@ -235,7 +235,7 @@ Base URL: `http://localhost:8080`. All bodies are JSON. Unknown JSON fields are 
 | `409` | `email_exists` | Email already used by another user |
 | `500` | `internal_error` | Unexpected error (details are logged, never returned) |
 
-### Samples
+#### Samples
 
 **Register**
 
@@ -338,7 +338,7 @@ WWW-Authenticate: Bearer
 {"error":{"code":"unauthorized","message":"missing or malformed Authorization header"}}
 ```
 
-### Request log
+#### Request log
 
 Each request produces one structured log line:
 
@@ -348,7 +348,7 @@ Each request produces one structured log line:
 
 `duration` is in nanoseconds (slog's JSON encoding of `time.Duration`).
 
-## gRPC API
+### gRPC API
 
 Service `user.v1.UserService` on `:9090` (`api/proto/user/v1/user.proto`):
 
@@ -384,7 +384,7 @@ grpcurl -plaintext -import-path api/proto -proto user/v1/user.proto \
 
 To regenerate code after editing the proto, run `make proto` (requires `protoc`, `protoc-gen-go` and `protoc-gen-go-grpc`).
 
-## Testing
+### Testing
 
 ```bash
 go test ./...              # unit tests
@@ -409,7 +409,7 @@ docker compose up -d mongo
 MONGO_TEST_URI=mongodb://localhost:27017 go test ./internal/adapter/outbound/mongodb/ -v
 ```
 
-### Manual end-to-end verification
+#### Manual end-to-end verification
 
 The compiled server was also run against a real MongoDB 9.0 instance and exercised with `curl` and `grpcurl`. The following behaviours were confirmed:
 
@@ -419,7 +419,7 @@ The compiled server was also run against a real MongoDB 9.0 instance and exercis
 - After a user deleted their own account, their token was rejected with `401`.
 - On interrupt, an in-flight request still completed with `201`. The reporter then stopped, both servers drained, and the process exited with code 0.
 
-## Design decisions and assumptions
+### Design decisions and assumptions
 
 **Architecture**
 
@@ -451,3 +451,84 @@ The compiled server was also run against a real MongoDB 9.0 instance and exercis
 - **No pagination** on `GET /users`, because the spec says "list all". For large datasets, `limit`/cursor parameters would be added at the repository port.
 - **The user-count job** runs as a goroutine with a `time.Ticker`. It stops when the shutdown context is cancelled, and each count has a timeout so a slow database cannot pile up ticks.
 - **gRPC** exposes only `CreateUser` and `GetUser`, as specified, both protected by token metadata. Tokens are obtained from the REST login endpoint.
+
+---
+
+## Part 2: Lottery Search System
+
+A design proposal for searching 10 million 6-digit lottery tickets with wildcard patterns (`****23`, `1****5`, `123***`) without ever giving the same ticket to two users at the same time. As the brief requires, this part is a design only, with no code.
+
+**Full design document:** [docs/lottery-search-design.md](docs/lottery-search-design.md). It covers architecture, data model, algorithm, concurrency, storage choice, performance analysis, failure handling and the alternatives considered.
+
+### Key observations
+
+1. **The number space is small.** A 6-digit number has only 10⁶ values, so 10M tickets means about 10 tickets (sets) per number. A bitmap over all numbers is only **125 KB**, and search cost depends on that size, not on the ticket count.
+2. **A pattern is an AND of per-position digits.** For example, `1****5` means "digit 1 is `1` AND digit 6 is `5`".
+3. **Patterns overlap.** `1****5` and `*****5` can match the same ticket, so locking per pattern is not enough; **exclusivity must be per ticket**.
+4. **Search and reservation must be one atomic step.** Otherwise two users can read the same ticket before either one claims it.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    U[Users] --> SS[Search service<br/>stateless Go]
+    U --> OS[Order service<br/>stateless Go]
+    SS -- "atomic search_and_hold script" --> R[(Redis<br/>bitmaps, stock, holds)]
+    OS -- "checkout" --> R
+    OS -- "conditional UPDATE" --> PG[(PostgreSQL<br/>system of record)]
+    L[Draw loader] --> PG
+    L --> R
+```
+
+### Storage choice
+
+| Store | Role | Why |
+| --- | --- | --- |
+| **Redis** | Search index and atomic allocator (hot path) | All matching state fits in memory (about 125 MB per draw). Lua scripts run one at a time, so search-and-reserve is atomic with no locks or retries. |
+| **PostgreSQL** | System of record for tickets, reservations and orders | ACID and durable. A conditional `UPDATE … WHERE status='available'` makes a double sale impossible even if Redis loses data. Redis state can be rebuilt from it. |
+
+### Wildcard matching
+
+The system keeps the following bitmaps, each 10⁶ bits (one bit per number):
+
+- **60 static position bitmaps**, `pos[i][d]`: bit *n* is set if digit *i* of *n* equals *d*.
+- **1 availability bitmap**, `avail`: bit *n* is set if number *n* still has unsold tickets.
+
+| Pattern type | Example | Method |
+| --- | --- | --- |
+| Exact | `123456` | Check one bit, then pop a ticket. |
+| Prefix | `123***` | Scan `avail` within the range 123000–123999. |
+| General | `****23`, `1****5` | `avail AND pos[5][2] AND pos[6][3]`, then find set bits. |
+| Any | `******` | Scan `avail` directly. |
+
+Scanning starts from a **random offset**. This spreads users who search the same pattern across different results.
+
+### Preventing duplicate results
+
+A single Redis Lua script, `search_and_hold`, does the following in one atomic step:
+
+1. Returns expired holds to the pool.
+2. Builds the match bitmap.
+3. Picks up to `N` numbers.
+4. **Removes** one ticket of each from the available pool (`SPOP`).
+5. Records a short **hold** (for example 5 minutes) for that user.
+
+Redis never runs two scripts at the same time. Once a ticket is returned to one user, it is no longer in the pool for any other search, **whatever pattern** that search uses. Holds expire or are released back to the pool.
+
+Purchases move through these states: HELD (Redis) → CHECKOUT (PostgreSQL `reserved`) → SOLD (PostgreSQL). Each move is a conditional update that must affect exactly one row.
+
+### Performance (estimates, to be confirmed by benchmark)
+
+| Metric | Value |
+| --- | --- |
+| Memory per draw | About 125 MB (bitmaps 7.6 MB + stock about 100 MB + holds) |
+| Work per search | At most a few × 125 KB of bitwise operations, plus O(N) pops. This is **independent of the ticket count**. |
+| Time inside Redis | About 50–200 µs per search |
+| Throughput | About 5,000–15,000 searches/s per Redis shard. Scale out by sharding the number space. |
+| Naïve SQL `LIKE '1____5'` | Full scan of 10M rows, taking seconds per query |
+
+### Main tradeoffs
+
+- **Holds hide tickets from other users for a few minutes.** Mitigated by a short TTL, a small page size, per-user hold caps, and releasing old holds when the user searches again.
+- **There are two stores to keep consistent.** Mitigated by making PostgreSQL authoritative and always writing it first, running a reconciler job, and keeping Redis fully rebuildable.
+- **One Redis shard runs scripts serially.** Mitigated by keeping each script's work bounded and sharding the number space for more throughput.
