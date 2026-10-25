@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 
-	"backend-golang-coding-test/internal/core/domain"
-	"backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
 )
 
 // Handler exposes the user and auth use cases over HTTP.

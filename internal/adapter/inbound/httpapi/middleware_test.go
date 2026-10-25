@@ -10,9 +10,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"backend-golang-coding-test/internal/core/domain"
-	"backend-golang-coding-test/internal/core/port"
-	"backend-golang-coding-test/internal/mocks"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/mocks"
 )
 
 func TestBearerToken(t *testing.T) {

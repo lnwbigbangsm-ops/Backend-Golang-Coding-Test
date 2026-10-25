@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
 )
 
 // NewRouter wires routes and middleware. Auth endpoints and /healthz are

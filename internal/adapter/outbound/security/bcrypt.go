@@ -4,7 +4,7 @@ package security
 import (
 	"golang.org/x/crypto/bcrypt"
 
-	"backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
 )
 
 // BcryptHasher implements port.PasswordHasher with bcrypt.

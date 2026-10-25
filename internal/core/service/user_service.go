@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"backend-golang-coding-test/internal/core/domain"
-	"backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
 )
 
 // UserService implements port.UserService.

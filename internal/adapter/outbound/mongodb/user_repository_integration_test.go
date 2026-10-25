@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
 )
 
 // TestUserRepository_Integration runs against a real MongoDB and is skipped

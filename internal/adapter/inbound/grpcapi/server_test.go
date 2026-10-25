@@ -13,12 +13,12 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
-	userv1 "backend-golang-coding-test/gen/user/v1"
-	"backend-golang-coding-test/internal/adapter/inbound/grpcapi"
-	"backend-golang-coding-test/internal/core/domain"
-	"backend-golang-coding-test/internal/core/port"
-	"backend-golang-coding-test/internal/core/service"
-	"backend-golang-coding-test/internal/mocks"
+	userv1 "github.com/lnwbigbangsm-ops/backend-golang-coding-test/gen/user/v1"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/inbound/grpcapi"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/service"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/mocks"
 )
 
 // newTestClient starts the gRPC server on an in-memory listener. Tokens are

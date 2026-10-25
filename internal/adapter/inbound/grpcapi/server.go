@@ -14,9 +14,9 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	userv1 "backend-golang-coding-test/gen/user/v1"
-	"backend-golang-coding-test/internal/core/domain"
-	"backend-golang-coding-test/internal/core/port"
+	userv1 "github.com/lnwbigbangsm-ops/backend-golang-coding-test/gen/user/v1"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
 )
 
 // Server implements userv1.UserServiceServer.

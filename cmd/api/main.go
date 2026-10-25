@@ -13,13 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	"backend-golang-coding-test/internal/adapter/inbound/grpcapi"
-	"backend-golang-coding-test/internal/adapter/inbound/httpapi"
-	"backend-golang-coding-test/internal/adapter/inbound/scheduler"
-	"backend-golang-coding-test/internal/adapter/outbound/mongodb"
-	"backend-golang-coding-test/internal/adapter/outbound/security"
-	"backend-golang-coding-test/internal/config"
-	"backend-golang-coding-test/internal/core/service"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/inbound/grpcapi"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/inbound/httpapi"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/inbound/scheduler"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/outbound/mongodb"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/outbound/security"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/config"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/service"
 )
 
 func main() {

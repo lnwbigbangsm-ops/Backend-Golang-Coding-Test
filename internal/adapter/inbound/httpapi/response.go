@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
 )
 
 const maxBodyBytes = 1 << 20 // 1 MiB

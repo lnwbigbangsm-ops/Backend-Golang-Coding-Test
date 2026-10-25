@@ -13,10 +13,10 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"backend-golang-coding-test/internal/adapter/inbound/httpapi"
-	"backend-golang-coding-test/internal/adapter/outbound/security"
-	"backend-golang-coding-test/internal/core/service"
-	"backend-golang-coding-test/internal/mocks"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/inbound/httpapi"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/adapter/outbound/security"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/service"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/mocks"
 )
 
 // newTestServer wires the real core services and JWT adapter against an

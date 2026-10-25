@@ -1,4 +1,4 @@
-module backend-golang-coding-test
+module github.com/lnwbigbangsm-ops/backend-golang-coding-test
 
 go 1.27.0
 

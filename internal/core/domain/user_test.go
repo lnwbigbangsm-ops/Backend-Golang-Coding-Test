@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
 )
 
 func TestValidateEmail(t *testing.T) {

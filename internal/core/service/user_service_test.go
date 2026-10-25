@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"backend-golang-coding-test/internal/core/domain"
-	"backend-golang-coding-test/internal/core/port"
-	"backend-golang-coding-test/internal/mocks"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/mocks"
 )
 
 var fixedNow = time.Date(2026, 1, 2, 3, 4, 5, 123456789, time.UTC)

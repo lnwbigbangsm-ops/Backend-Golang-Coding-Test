@@ -4,7 +4,7 @@ package httpapi
 import (
 	"time"
 
-	"backend-golang-coding-test/internal/core/domain"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/domain"
 )
 
 type createUserRequest struct {

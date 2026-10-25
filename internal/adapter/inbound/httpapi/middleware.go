@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"backend-golang-coding-test/internal/core/port"
+	"github.com/lnwbigbangsm-ops/backend-golang-coding-test/internal/core/port"
 )
 
 type ctxKey struct{}
