@@ -42,7 +42,7 @@ func NewJWTService(secret, issuer string, ttl time.Duration) (*JWTService, error
 
 // Issue signs a token whose subject is the user ID.
 func (s *JWTService) Issue(user *domain.User) (string, time.Time, error) {
-	now := s.now()
+	now := s.now().UTC()
 	exp := now.Add(s.ttl)
 	c := claims{
 		Email: user.Email,

@@ -404,6 +404,16 @@ docker compose up -d mongo
 MONGO_TEST_URI=mongodb://localhost:27017 go test ./internal/adapter/outbound/mongodb/ -v
 ```
 
+### Manual end-to-end verification
+
+The compiled server was also run against a real MongoDB 9.0 instance and exercised with `curl` and `grpcurl`. The following behaviours were confirmed:
+
+- Every REST endpoint returned the documented status code and body, including `409` on duplicate email (register and update), `400` on validation errors and unknown fields, `404` on malformed and unknown IDs, and `401` without a token.
+- gRPC `CreateUser` / `GetUser` work with a REST-issued token, and calls without one are rejected with `Unauthenticated`.
+- The user-count goroutine logged `total users` every 10 seconds.
+- After a user deleted their own account, their token was rejected with `401`.
+- On interrupt, an in-flight request still completed with `201`. The reporter then stopped, both servers drained, and the process exited with code 0.
+
 ## Design decisions and assumptions
 
 **Architecture**

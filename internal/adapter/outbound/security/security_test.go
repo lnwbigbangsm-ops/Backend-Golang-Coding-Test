@@ -41,8 +41,8 @@ func TestJWT_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
-	if !exp.Equal(now.Add(time.Hour)) {
-		t.Errorf("exp = %v", exp)
+	if !exp.Equal(now.Add(time.Hour)) || exp.Location() != time.UTC {
+		t.Errorf("exp = %v, want %v in UTC", exp, now.Add(time.Hour))
 	}
 	parsed, _, err := jwt.NewParser().ParseUnverified(token, jwt.MapClaims{})
 	if err != nil || parsed.Method.Alg() != "HS256" {
