@@ -528,6 +528,14 @@ The compiled server was also run against a real MongoDB 9.0 instance and exercis
 - After a user deleted their own account, their token was rejected with `401`.
 - On interrupt, an in-flight request still completed with `201`. The reporter then stopped, both servers drained, and the process exited with code 0.
 
+The Docker Compose stack (`docker compose up --build`, Docker 29.9) was smoke-tested the same way:
+
+- MongoDB became healthy before the API started.
+- Register, login, list, get, patch and delete returned `201`, `200`, `200`, `200`, `200` and `204`. A request without a token got `401`.
+- gRPC `CreateUser` and `GetUser` on port 9090 worked with a REST-issued token. An unknown ID returned `NotFound`.
+- The container logged each request and printed `total users` every 10 seconds.
+- `docker compose stop` sent SIGTERM. The API logged `shutdown complete` and exited with code 0.
+
 ### Design decisions and assumptions
 
 **Architecture**
@@ -604,7 +612,7 @@ flowchart LR
 
 | Store | Role | Why |
 | --- | --- | --- |
-| **Redis** | Search index and atomic allocator (hot path) | All matching state fits in memory (about 125 MB per draw). Lua scripts run one at a time, so search-and-reserve is atomic with no locks or retries. |
+| **Redis** | Search index and atomic allocator (hot path) | All matching state fits in memory (108 MB per draw measured, before holds). Lua scripts run one at a time, so search-and-reserve is atomic with no locks or retries. |
 | **PostgreSQL** | System of record for tickets, reservations and orders | ACID and durable. A conditional `UPDATE … WHERE status='available'` makes a double sale impossible even if Redis loses data. Redis state can be rebuilt from it. |
 
 ### Wildcard matching
@@ -637,14 +645,17 @@ Redis never runs two scripts at the same time. Once a ticket is returned to one 
 
 Purchases move through these states: HELD (Redis) → CHECKOUT (PostgreSQL `reserved`) → SOLD (PostgreSQL). Each move is a conditional update that must affect exactly one row.
 
-### Performance (estimates, to be confirmed by benchmark)
+### Performance (measured with 10M tickets)
+
+A prototype of the Redis design was benchmarked on Redis 7.4 with 10M tickets loaded (method and full results in [design doc §9](docs/lottery-search-design.md#9-performance-analysis)). The prototype is not in this repository because Part 2 is design-only.
 
 | Metric | Value |
 | --- | --- |
-| Memory per draw | About 125 MB (bitmaps 7.6 MB + stock about 100 MB + holds) |
+| Memory per draw | **108 MB** before holds (bitmaps 7.8 MB + stock 99.6 MB) |
 | Work per search | At most a few × 125 KB of bitwise operations, plus O(N) pops. This is **independent of the ticket count**. |
-| Time inside Redis | About 50–200 µs per search |
-| Throughput | About 5,000–15,000 searches/s per Redis shard. Scale out by sharding the number space. |
+| Time inside Redis (N = 10) | **48–163 µs mean, p99 ≤ 257 µs**, depending on the pattern class |
+| Throughput | **About 8,100 searches/s** per Redis shard (server-side ceiling); 6,555/s reached with 64 clients on a laptop. Scale out by sharding the number space. |
+| No duplicates | 200 concurrent clients drained `7****3`: exactly 100,000 tickets, **0 duplicates** |
 | Naïve SQL `LIKE '1____5'` | Full scan of 10M rows, taking seconds per query |
 
 ### Main tradeoffs

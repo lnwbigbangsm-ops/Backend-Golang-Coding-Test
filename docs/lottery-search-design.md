@@ -27,7 +27,7 @@ Part 2 of the Backend Golang Coding Test. This is a design document only; it con
 | Search and allocation engine | **Redis**: one bitmap per index dimension over the 10⁶ possible numbers, plus a set of available tickets per number. |
 | Wildcard matching | Bitwise `AND` of a precomputed *digit-position bitmap* for each fixed digit with an *availability bitmap*. Then a scan for set bits from a random offset. |
 | No duplicate results | Search and reservation happen in **one atomic Redis Lua script**. A returned ticket is removed from the available pool and placed on a short **hold** (TTL) for that user, in the same step. |
-| Cost per search | Bounded by the size of the *number space* (10⁶ bits = 125 KB per bitmap), **not the ticket count**. Estimated at tens to low hundreds of microseconds inside Redis. |
+| Cost per search | Bounded by the size of the *number space* (10⁶ bits = 125 KB per bitmap), **not the ticket count**. Measured at 48–163 µs mean inside Redis with 10M tickets loaded (§9). |
 
 ---
 
@@ -313,28 +313,55 @@ Holds make inventory temporarily invisible, so a bot could repeatedly search a p
 
 ### 9.1 Memory (per draw)
 
-| Structure | Size |
-| --- | --- |
-| Position bitmaps (60 × 125 KB) | 7.5 MB |
-| Availability bitmap | 0.125 MB |
-| Stock sets (10⁶ numbers, about 10 sets each) | about 100 MB (or 8 MB with the 64-bit mask variant) |
-| Holds (for example 100k concurrent holds × about 150 B) | about 15 MB |
-| **Total** | **about 125 MB**, which fits comfortably in a small Redis instance. |
+Sizes were measured with `INFO memory` (`used_memory`) on Redis 7.4 after loading 10M tickets (§9.4). Holds were not measured and remain an estimate.
+
+| Structure | Expected | Measured |
+| --- | --- | --- |
+| Position bitmaps (60 × 125 KB) + availability bitmap | 7.6 MB | **7.8 MB** |
+| Stock sets (10⁶ numbers × 10 sets) | about 100 MB (or 8 MB with the 64-bit mask variant) | **99.6 MB** (`MEMORY USAGE` of one set: 96 B) |
+| Holds (for example 100k concurrent holds × about 150 B) | about 15 MB | not measured |
+| **Total** | about 125 MB | **108.4 MB** before holds, which fits comfortably in a small Redis instance. |
+
+Loading all 10M tickets from scratch took about **4 s** (bitmaps built client-side and written with `SET`, stock written with pipelined `SADD`).
 
 ### 9.2 Time per search (inside Redis)
 
-The figures below are *estimates* from memory bandwidth and typical Redis command costs. They should be validated with a benchmark before launch.
+Measured server-side for `search_and_hold` with N = 10, 2,000 searches per class with random digits and random offsets, and the stock released after each search so every search saw full inventory. "Mean" is `usec_per_call` from `INFO commandstats`; percentiles are from `INFO latencystats`.
 
-| Step | Work | Estimate |
-| --- | --- | --- |
-| Sweep expired holds | at most 200 entries (bounded) | ≤ 50 µs, usually ~0 |
-| `BITOP AND` (general pattern, k fixed digits) | (k+1) × 125 KB sequential, SIMD-friendly | ~10–60 µs |
-| `BITPOS` collection of N numbers | ≤ 125 KB scanned in total | ~5–30 µs |
-| N × (`SPOP` + `ZADD` + `HSET` + `SADD`) | N = 10 → about 40 O(1) commands | ~20–40 µs |
-| **Script total** | | **about 50–200 µs** |
+| Pattern class | Method | Mean | p50 | p99 | p99.9 |
+| --- | --- | --- | --- | --- | --- |
+| Exact `123456` (k=6, returns 1 ticket) | `BITPOS` on a 1-bit range (same as `GETBIT`) | 48 µs | 50 µs | 87 µs | 127 µs |
+| Any `******` (k=0) | `BITPOS avail` | 104 µs | 101 µs | 184 µs | 264 µs |
+| Prefix `123***` (k=3) | `BITPOS` on a range, no `BITOP` | 107 µs | 102 µs | 199 µs | 264 µs |
+| General `1****5` (k=2) | `BITOP` over 3 bitmaps | 137 µs | 132 µs | 219 µs | 324 µs |
+| Suffix `****23` (k=2) | `BITOP` over 3 bitmaps | 139 µs | 134 µs | 239 µs | 330 µs |
+| General `1*3*5*` (k=3) | `BITOP` over 4 bitmaps | 147 µs | 142 µs | 232 µs | 334 µs |
+| General `12**56` (k=4) | `BITOP` over 5 bitmaps | 163 µs | 158 µs | 257 µs | 426 µs |
 
-- **Per-shard throughput:** about **5,000–15,000 searches/s**, because scripts run serially.
-- **End-to-end latency** is dominated by the network: about 1–3 ms p50 from the search service.
+What the numbers show:
+
+- **Script total: 48–163 µs mean, p99 ≤ 257 µs**, inside the 50–200 µs originally estimated.
+- **Allocation dominates, not search.** The no-`BITOP` classes (any, prefix) cost about 105 µs for 10 tickets, against 48 µs for one ticket. So each held ticket costs about 6 µs (`SPOP`, `SCARD`, `ZADD`, `HSET`, `SADD`).
+- **`BITOP` adds about 30–55 µs**, growing with the number of fixed digits. `k = 4` is the slowest class, so it is the first candidate for the `BITFIELD` micro-optimisation in §6.2.
+- **Search cost did not depend on the ticket count.** No step touches more than a few 125 KB bitmaps.
+
+### 9.3 Throughput and correctness under concurrency
+
+| Test | Result |
+| --- | --- |
+| 64 clients, mixed pattern classes, 10 s, no release | **6,555 searches/s** reached (65,547 searches, 571,974 tickets held). Server time 123 µs per call, so the single-threaded ceiling is **about 8,100 searches/s per shard**. Redis was about 80% busy; the rest was client and Docker Desktop network overhead. |
+| 200 clients searching `7****3` until it sold out | 10,204 searches handed out **exactly 100,000 tickets, with 0 duplicates** and every ticket matching the pattern, in 1.6 s. |
+| Hold expiry | 10 tickets of one number held with a 300 ms TTL. A search before expiry returned none; a search after expiry got one back through the lazy sweep. |
+
+- **End-to-end latency** is dominated by the network. In the test setup (client on the Windows host, Redis in Docker Desktop) the client p50 was about 0.5 ms for every class; in production expect about 1–3 ms p50 from the search service.
+
+### 9.4 Benchmark method
+
+- **Environment:** Redis 7.4.11 in Docker Desktop (WSL 2) on Windows 11, AMD Ryzen 7 5825U (8 cores, 16 threads). Persistence off. The Go client (go-redis v9) ran on the same host.
+- **Data:** one draw with 10⁶ numbers × 10 sets = 10M tickets, using the key layout in §5.2.
+- **Scripts:** `search_and_hold` implemented as specified in §6.2 and §7.1 (sweep, per-user cap, strategy selection, `BITPOS` from a random offset with one wrap, atomic `SPOP` and hold), plus a `release` script (§7.3).
+- **Timing:** server-side only, from `INFO commandstats` and `INFO latencystats`, reset before each class. Scripts that release stock ran through `EVAL` so they were not counted with the searches (`EVALSHA`). `SLOWLOG` was not used because it also logs every command inside a script, which inflates timings.
+- The prototype is not in this repository, because Part 2 is a design exercise. Numbers come from a laptop and are indicative; a production sizing run should use the target hardware with the client on a separate host.
 
 **Complexity.** For a pattern with `k` fixed digits:
 
@@ -343,7 +370,7 @@ The figures below are *estimates* from memory bandwidth and typical Redis comman
 
 A naïve table scan with `LIKE '1____5'` costs `O(T)`, which is 10⁷ rows per query and takes seconds. A B-tree on `number` only helps for prefix patterns.
 
-### 9.3 Scaling beyond one shard
+### 9.5 Scaling beyond one shard
 
 - **More tickets per number** (for example 100M tickets) changes only the stock size. Search cost stays the same.
 - **More traffic:** partition the *number space* across `S` Redis primaries (for example by `n mod S`), each with its own bitmaps over its own numbers.
@@ -422,6 +449,6 @@ There are 11⁶ ≈ 1.77M possible patterns, and every sale would need to update
 | --- | --- | --- | --- |
 | Allocate on search (holds) | Hard guarantee of no simultaneous duplicates | Shown tickets are temporarily unavailable to others | Short TTL, small `N`, per-user caps, release on re-search |
 | Redis as the hot path | Microsecond search, atomic scripts | Two stores to keep consistent; holds can be lost on failover | PostgreSQL is authoritative; PostgreSQL-first ordering; reconciler; Redis is rebuildable |
-| Serial script execution | Trivially correct concurrency | Single-shard throughput ceiling (~10k/s) | Bounded script work; shard the number space |
+| Serial script execution | Trivially correct concurrency | Single-shard throughput ceiling (about 8k/s measured) | Bounded script work; shard the number space |
 | Random start offset | Fair, spread-out results | Results are not sorted | Sort the returned page client-side if needed |
 | Stock as sets per number | General (any number of sets) | ~100 MB vs 8 MB | Switch to 64-bit masks when sets per number ≤ 64 |
